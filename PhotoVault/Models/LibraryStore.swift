@@ -242,9 +242,13 @@ final class LibraryStore {
     @discardableResult
     func addImage(data: Data, to folderID: UUID) async -> Asset? {
         guard folder(folderID) != nil else { return nil }
-        guard let asset = await Task.detached(priority: .userInitiated) {
+
+        // Task.detached 的尾随闭包不能直接写在 guard 条件里：
+        // 编译器会把那个 { 当成 guard 的语句块开头。先把任务提出来。
+        let work = Task.detached(priority: .userInitiated) {
             LibraryStore.persist(data)
-        }.value else { return nil }
+        }
+        guard let asset = await work.value else { return nil }
 
         return attach(asset, to: folderID) ? asset : nil
     }
