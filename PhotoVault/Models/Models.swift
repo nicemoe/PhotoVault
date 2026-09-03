@@ -102,11 +102,13 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// 这些图标要放进圆形底里，所以避开本身就是圆环的字形
+    /// （circle.lefthalf.filled、sun.max 的描边圆都会变成「圆套圆」）
     var icon: String {
         switch self {
-        case .system: return "circle.lefthalf.filled"
-        case .light:  return "sun.max"
-        case .dark:   return "moon"
+        case .system: return "iphone"        // 跟随这台设备的设置
+        case .light:  return "sun.max.fill"  // 实心日轮 + 光芒，不是圆环
+        case .dark:   return "moon.fill"     // 月牙
         }
     }
 

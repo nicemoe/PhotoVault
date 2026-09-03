@@ -68,29 +68,40 @@ header{
 .card.dropping{border-color:var(--accent);transform:scale(1.02)}
 .card.dropping .cover::after{content:"松开上传到这里";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   background:color-mix(in srgb,var(--accent) 78%,transparent);color:#fff;font-size:13.5px;font-weight:700}
-.cover{aspect-ratio:1/1;background:var(--fill);display:grid;gap:2px;position:relative;cursor:pointer}
-.cover.c1{grid-template-columns:1fr}
-.cover.c2{grid-template-columns:1fr 1fr}
-.cover.c3{grid-template-columns:1.6fr 1fr;grid-template-rows:1fr 1fr}
-.cover.c3 img:first-child{grid-row:span 2}
-.cover.c4{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
-.cover img{width:100%;height:100%;object-fit:cover;display:block}
+/* 正方形封面不要靠 aspect-ratio：部分浏览器下图片的固有高度会把它顶开，
+   有图的封面就比空封面高，同一行的卡片和按钮跟着错位。
+   height:0 + padding-top:100% 的高度完全来自 padding，内容绝对定位填充，
+   无论图片多大都撑不开。 */
+.cover{position:relative;width:100%;height:0;padding-top:100%;flex:0 0 auto;
+  overflow:hidden;background:var(--fill);cursor:pointer}
+.tiles{position:absolute;inset:0;display:grid;gap:2px}
+.tiles.c1{grid-template-columns:1fr;grid-template-rows:1fr}
+.tiles.c2{grid-template-columns:1fr 1fr;grid-template-rows:1fr}
+.tiles.c3{grid-template-columns:1.6fr 1fr;grid-template-rows:1fr 1fr}
+.tiles.c3 img:first-child{grid-row:span 2}
+.tiles.c4{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.tiles img{width:100%;height:100%;min-width:0;min-height:0;object-fit:cover;display:block}
 .cover .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:.3}
 .cover .empty svg{width:34%;max-width:58px;fill:currentColor}
 .dot{position:absolute;top:10px;left:10px;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.85);display:flex;align-items:center;justify-content:center}
 .dot i{width:9px;height:9px;border-radius:50%;display:block}
-.cbody{padding:12px 13px 13px}
+/* 撑满卡片剩余高度，配合 .cactions 的 margin-top:auto，
+   即使某张卡名字换行或按钮换行，同一行里所有卡的按钮也都贴着底部对齐 */
+.cbody{padding:12px 13px 13px;display:flex;flex-direction:column;flex:1;min-height:0}
 .cname{font-weight:650;font-size:14.5px;letter-spacing:-.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .cmeta{font-size:12.5px;color:var(--sub);margin-top:2px}
-.cactions{display:flex;gap:4px;margin-top:10px;flex-wrap:wrap}
-.mini{height:26px;padding:0 10px;border-radius:8px;background:var(--fill);font-size:12.5px;font-weight:600;color:var(--sub)}
+/* gap 和内边距收紧，让「移动/重命名/删除」在窄卡片上也能排成一行；
+   万一还是换行，margin-top:auto 也能保证同一行卡片的按钮对齐 */
+.cactions{display:flex;gap:3px;margin-top:auto;padding-top:10px;flex-wrap:wrap}
+.mini{height:26px;padding:0 7px;border-radius:8px;background:var(--fill);font-size:12.5px;font-weight:600;color:var(--sub);white-space:nowrap}
 .mini:active{transform:scale(.96)}
 .mini.danger{color:var(--danger)}
 
 /* 照片网格 */
 .photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
-.ph{position:relative;aspect-ratio:1/1;border-radius:12px;overflow:hidden;background:var(--fill)}
-.ph img{width:100%;height:100%;object-fit:cover;display:block}
+/* 同上，照片格也不用 aspect-ratio */
+.ph{position:relative;width:100%;height:0;padding-top:100%;border-radius:12px;overflow:hidden;background:var(--fill)}
+.ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .ph .del{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:15px;line-height:26px;text-align:center;opacity:0;transition:opacity .15s}
 .ph:hover .del,.ph:active .del{opacity:1}
 
@@ -285,11 +296,13 @@ function renderToolbar(){
 /* ---------- 视图 ---------- */
 function coverHTML(ids, color){
   const n = Math.min(ids.length, 4);
+  const dot = color ? dotHTML(color) : '';
+  // 图片统一包在绝对定位的 .tiles 里，撑不开外面的正方形 .cover
   if(n === 0){
-    return `<div class="cover c1"><div class="empty">${ICON.image}</div>${color ? dotHTML(color) : ''}</div>`;
+    return `<div class="cover"><div class="empty">${ICON.image}</div>${dot}</div>`;
   }
   const imgs = ids.slice(0, n).map(id => `<img loading="lazy" src="/thumb?id=${id}&s=360" alt="">`).join('');
-  return `<div class="cover c${n}">${imgs}${color ? dotHTML(color) : ''}</div>`;
+  return `<div class="cover"><div class="tiles c${n}">${imgs}</div>${dot}</div>`;
 }
 function dotHTML(color){ return `<span class="dot"><i style="background:${color}"></i></span>`; }
 

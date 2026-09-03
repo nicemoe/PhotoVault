@@ -63,8 +63,10 @@ enum Theme {
 
     /// 图片四周的底色
     static let viewerBackground = Color(light: 0xFFFFFF, dark: 0x000000)
-    /// 预览页上的图标和文字
-    static let viewerLabel = Color(light: 0x1B1F27, dark: 0xFFFFFF)
+    /// 预览页上的图标和文字。
+    /// 浅色下不用接近纯黑：预览页整片留白，纯黑控件显得很重，
+    /// 中性灰既压得住又不抢照片。
+    static let viewerLabel = Color(light: 0x5A6172, dark: 0xFFFFFF)
     /// 预览页上圆形按钮的底
     static let viewerControl = Color(light: 0x000000, dark: 0xFFFFFF)
 
