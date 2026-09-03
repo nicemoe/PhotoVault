@@ -260,7 +260,10 @@ struct RootView: View {
     // MARK: 外观切换
     //
     // 单独放在左上角，不塞进加号菜单——加号的语义是「添加」，不是「设置」。
-    // 图标本身跟着当前外观变，一眼能看出处于哪个模式。
+    //
+    // 按钮图标固定不变：按钮是靠形状被认出来的，让它在三个不相干的轮廓之间
+    // 跳变反而不好认；当前是浅是深，看 App 本身就知道，不需要图标再表达一遍。
+    // 具体选中哪一项由菜单里的对勾体现。
 
     private var appearanceMenu: some View {
         Menu {
@@ -275,7 +278,7 @@ struct RootView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Image(systemName: store.appearance.icon).circleIcon(glyph: 13.5)
+            Image(systemName: "paintpalette").circleIcon(glyph: 13.5)
         }
     }
 
