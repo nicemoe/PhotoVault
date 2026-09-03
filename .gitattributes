@@ -1,0 +1,17 @@
+* text=auto
+
+# CI 里的 shell 脚本和 Xcode 工程文件必须是 LF，
+# 在 Windows 上检出成 CRLF 会让 macos runner 上的 bash 报错
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.swift text eol=lf
+*.plist text eol=lf
+*.json  text eol=lf
+*.pbxproj    text eol=lf
+*.xcscheme   text eol=lf
+*.xcworkspacedata text eol=lf
+
+*.png binary
+*.jpg binary
+*.ipa binary
