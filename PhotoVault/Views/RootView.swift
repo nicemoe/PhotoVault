@@ -283,10 +283,9 @@ struct RootView: View {
                 Label(store.appearance.title, systemImage: store.appearance.icon)
             }
         } label: {
-            // 三条杠是线条型字形：字重给 medium 让线之间透气，
-            // 字号再压到 11.5，否则横向会占满圆底
-            Image(systemName: "line.3.horizontal")
-                .circleIcon(glyph: 11.5, weight: .medium)
+            // 三条杠是自己画的，宽度/线宽/行距各自独立可调，
+            // 见 HamburgerIcon 里的说明
+            HamburgerIcon().circleIcon()
         }
     }
 

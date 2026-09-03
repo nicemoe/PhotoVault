@@ -178,9 +178,29 @@ extension View {
     /// - Parameters:
     ///   - glyph: 字形点数。窄字形（plus、checkmark）用 14，
     ///     宽字形（arrow.up.arrow.down）用 11.5 才能和窄字形看起来一样重。
-    ///   - weight: 线条型字形（line.3.horizontal）要调细，否则线间空隙被压没。
+    ///   - weight: 线条型字形要调细，否则线间空隙被压没。
     func circleIcon(glyph: CGFloat = 14, weight: Font.Weight = .semibold) -> some View {
         modifier(CircleIconLook(glyphSize: glyph, glyphWeight: weight))
+    }
+}
+
+/// 自己画的三条杠。
+///
+/// 不用 line.3.horizontal 那个 SF Symbol：它的宽度、线宽、行间距是锁死的比例，
+/// 调字号只会三者等比缩放——想要「更窄一点、线更粗一点、上下更松一点」
+/// 这种各自独立的调整，字形做不到。
+struct HamburgerIcon: View {
+    var width: CGFloat = 14
+    var thickness: CGFloat = 2
+    var spacing: CGFloat = 4
+
+    var body: some View {
+        VStack(spacing: spacing) {
+            ForEach(0..<3, id: \.self) { _ in
+                Capsule().frame(width: width, height: thickness)
+            }
+        }
+        // Capsule 默认用 foregroundStyle 填充，颜色由 circleIcon 统一给
     }
 }
 
