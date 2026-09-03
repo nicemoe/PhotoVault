@@ -265,19 +265,26 @@ struct RootView: View {
 
     private var sideMenu: some View {
         Menu {
-            // .inline 让三个选项直接铺开，标题留空就不会多出一行表头
-            Picker("", selection: Binding(
-                get: { store.appearance },
-                set: { store.appearance = $0 }
-            )) {
-                ForEach(AppTheme.allCases) { theme in
-                    Label(theme.title, systemImage: theme.icon).tag(theme)
+            // 「外观」作为一个条目，点开才是三个选项。
+            // 不把三个选项直接铺在这一层，是为了给后续功能留位置。
+            Menu {
+                Picker("", selection: Binding(
+                    get: { store.appearance },
+                    set: { store.appearance = $0 }
+                )) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Label(theme.title, systemImage: theme.icon).tag(theme)
+                    }
                 }
+                .pickerStyle(.inline)
+            } label: {
+                Label("外观", systemImage: "circle.lefthalf.filled")
             }
-            .pickerStyle(.inline)
         } label: {
-            // 和排序图标一样是宽字形，字号要比 plus 小一档才不显得撑
-            Image(systemName: "line.3.horizontal").circleIcon(glyph: 12.5)
+            // 三条杠是线条型字形：字重给 medium 让线之间透气，
+            // 字号再压到 11.5，否则横向会占满圆底
+            Image(systemName: "line.3.horizontal")
+                .circleIcon(glyph: 11.5, weight: .medium)
         }
     }
 

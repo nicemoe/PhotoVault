@@ -153,6 +153,9 @@ extension View {
 /// 同字号下比 plus 宽约一半，共用字号就会显得要撑破圆底。
 struct CircleIconLook: ViewModifier {
     var glyphSize: CGFloat
+    /// 线条型字形（比如三条杠）用粗字重会把线之间的空隙压没，看着发挤，
+    /// 这类字形要单独调细。
+    var glyphWeight: Font.Weight = .semibold
     /// 可视圆直径
     var diameter: CGFloat = 30
     /// 触摸区域，比可视圆大一圈，避免圆变小之后不好点。
@@ -162,7 +165,7 @@ struct CircleIconLook: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .font(.system(size: glyphSize, weight: .semibold))
+            .font(.system(size: glyphSize, weight: glyphWeight))
             .foregroundStyle(Theme.accent)
             .frame(width: diameter, height: diameter)
             .background(Theme.accent.opacity(0.12), in: Circle())
@@ -172,10 +175,12 @@ struct CircleIconLook: ViewModifier {
 }
 
 extension View {
-    /// - Parameter glyph: 字形点数。窄字形（plus、checkmark）用 14，
-    ///   宽字形（arrow.up.arrow.down）用 11.5 才能和窄字形看起来一样重。
-    func circleIcon(glyph: CGFloat = 14) -> some View {
-        modifier(CircleIconLook(glyphSize: glyph))
+    /// - Parameters:
+    ///   - glyph: 字形点数。窄字形（plus、checkmark）用 14，
+    ///     宽字形（arrow.up.arrow.down）用 11.5 才能和窄字形看起来一样重。
+    ///   - weight: 线条型字形（line.3.horizontal）要调细，否则线间空隙被压没。
+    func circleIcon(glyph: CGFloat = 14, weight: Font.Weight = .semibold) -> some View {
+        modifier(CircleIconLook(glyphSize: glyph, glyphWeight: weight))
     }
 }
 
