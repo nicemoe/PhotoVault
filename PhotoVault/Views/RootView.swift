@@ -212,6 +212,10 @@ struct RootView: View {
                 ImportProgressOverlay(progress: importProgress)
             }
         }
+        // 作用在 window 上，所以 sheet、全屏预览都会跟着走
+        .onChange(of: store.appearance, initial: true) { _, theme in
+            theme.apply()
+        }
         .onChange(of: scenePhase) { _, phase in
             // 进入后台后 socket 会被系统回收，直接停掉避免显示"运行中"却连不上
             if phase == .background, wifi.isRunning { wifi.stop() }
@@ -246,18 +250,17 @@ struct RootView: View {
 
             Divider()
 
-            Menu {
-                Picker("外观", selection: Binding(
-                    get: { store.appearance },
-                    set: { store.appearance = $0 }
-                )) {
-                    ForEach(AppTheme.allCases) { theme in
-                        Label(theme.title, systemImage: theme.icon).tag(theme)
-                    }
+            // .inline 让三个选项直接铺在菜单里，而不是收进「外观」子菜单；
+            // 标题留空就不会多出一行表头
+            Picker("", selection: Binding(
+                get: { store.appearance },
+                set: { store.appearance = $0 }
+            )) {
+                ForEach(AppTheme.allCases) { theme in
+                    Label(theme.title, systemImage: theme.icon).tag(theme)
                 }
-            } label: {
-                Label("外观：\(store.appearance.title)", systemImage: store.appearance.icon)
             }
+            .pickerStyle(.inline)
         } label: {
             Image(systemName: "plus").circleIcon()
         }

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftUI   // AppTheme 要用 ColorScheme
+import UIKit   // AppTheme 要用 UIUserInterfaceStyle
 
 // MARK: - 图片
 
@@ -110,12 +110,24 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// nil 表示交给系统决定
-    var colorScheme: ColorScheme? {
+    /// 用 UIKit 的 overrideUserInterfaceStyle 而不是 SwiftUI 的 preferredColorScheme：
+    /// 后者一旦设过非 nil 值，再设回 nil 并不会恢复成跟随系统，
+    /// 只有 .unspecified 能真正还原。
+    var interfaceStyle: UIUserInterfaceStyle {
         switch self {
-        case .system: return nil
+        case .system: return .unspecified
         case .light:  return .light
         case .dark:   return .dark
+        }
+    }
+
+    @MainActor
+    func apply() {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = interfaceStyle
+            }
         }
     }
 }
