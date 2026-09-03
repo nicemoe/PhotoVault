@@ -134,19 +134,34 @@ extension View {
 
 /// 导航栏上的圆形图标外观。
 /// 直接作用在 label 上而不是用 ButtonStyle —— Menu 不保证把 buttonStyle 传给它的 label。
+///
+/// 字号按字形单独给，不要所有图标共用一个值：SF Symbols 的 size 约等于字高，
+/// 宽度却随字形变化很大。arrow.up.arrow.down 是左右并排的两个箭头，
+/// 同字号下比 plus 宽约一半，共用字号就会显得要撑破圆底。
 struct CircleIconLook: ViewModifier {
+    var glyphSize: CGFloat
+    /// 可视圆直径
+    var diameter: CGFloat = 30
+    /// 触摸区域，比可视圆大一圈，避免圆变小之后不好点
+    var hitSize: CGFloat = 40
+
     func body(content: Content) -> some View {
         content
-            .font(.system(size: 16, weight: .semibold))
+            .font(.system(size: glyphSize, weight: .semibold))
             .foregroundStyle(Theme.accent)
-            .frame(width: 34, height: 34)
+            .frame(width: diameter, height: diameter)
             .background(Theme.accent.opacity(0.12), in: Circle())
-            .contentShape(Circle())
+            .frame(width: hitSize, height: hitSize)
+            .contentShape(Rectangle())
     }
 }
 
 extension View {
-    func circleIcon() -> some View { modifier(CircleIconLook()) }
+    /// - Parameter glyph: 字形点数。窄字形（plus、checkmark）用 14，
+    ///   宽字形（arrow.up.arrow.down）用 11.5 才能和窄字形看起来一样重。
+    func circleIcon(glyph: CGFloat = 14) -> some View {
+        modifier(CircleIconLook(glyphSize: glyph))
+    }
 }
 
 /// 主要操作按钮：实色块、无渐变

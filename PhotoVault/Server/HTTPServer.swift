@@ -244,9 +244,14 @@ private final class HTTPConnection {
         }
         guard let request = pending, buffer.count >= request.contentLength else { return }
 
+        // prefix / removeFirst 都是按元素个数算的，与 startIndex 无关，这里是安全的
         let body = Data(buffer.prefix(request.contentLength))
         buffer.removeFirst(request.contentLength)
         pending = nil
+
+        // 一个请求处理完、缓冲区正好空了就重建一份，让 startIndex 回到 0，
+        // 避免长连接上偏移量一路累加
+        if buffer.isEmpty { buffer = Data() }
 
         dispatch(request, body: body)
     }
@@ -254,9 +259,16 @@ private final class HTTPConnection {
     /// 解析出 header 后把它从缓冲区里摘掉，返回是否成功
     private func parseHeaders() -> Bool {
         let terminator = Data("\r\n\r\n".utf8)
-        // 与上次扫描位置重叠 3 字节，防止分隔符正好跨在两个数据包中间
-        let start = max(0, min(headerScanOffset - 3, buffer.count))
-        guard let range = buffer.range(of: terminator, in: start..<buffer.endIndex) else {
+
+        // 关键：Data.removeSubrange 不会把 startIndex 归零，只是往前推。
+        // 所以 keep-alive 连接处理完第一个请求后 startIndex 就不是 0 了，
+        // count 和 endIndex 属于两个坐标系，混用会让 range(of:in:) 越界
+        // 抛 NSRangeException（Swift 接不住，直接 abort）。
+        // headerScanOffset 一律当作相对 startIndex 的偏移量，用 index(_:offsetBy:) 换算。
+        let skip = min(max(0, headerScanOffset - 3), buffer.count)
+        let searchStart = buffer.index(buffer.startIndex, offsetBy: skip)
+
+        guard let range = buffer.range(of: terminator, in: searchStart..<buffer.endIndex) else {
             headerScanOffset = buffer.count
             return false
         }

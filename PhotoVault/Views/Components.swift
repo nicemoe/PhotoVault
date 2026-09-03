@@ -276,7 +276,8 @@ struct SortMenu: View {
                 Label("手动调整顺序…", systemImage: "arrow.up.arrow.down.square")
             }
         } label: {
-            Image(systemName: "arrow.up.arrow.down").circleIcon()
+            // 这个字形是左右并排两个箭头，比 plus 宽得多，字号要相应压小
+            Image(systemName: "arrow.up.arrow.down").circleIcon(glyph: 11.5)
         }
     }
 }
