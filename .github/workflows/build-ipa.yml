@@ -40,12 +40,17 @@ jobs:
           echo "机器上可用的 Xcode："
           ls -d /Applications/Xcode*.app
           sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          xcodebuild -version
+
+          # 不要写成 xcodebuild -version | head -1：head 读完首行就关管道，
+          # Xcode 26 的 xcodebuild 继续写会撞 broken pipe 并抛未捕获异常直接 abort（134），
+          # 叠加 pipefail 就会让整步失败。先整段捕获再解析。
+          version_output="$(xcodebuild -version)"
+          echo "$version_output"
 
           # 工程用了 Xcode 16 的文件系统同步分组（objectVersion 77），低版本打不开
-          major=$(xcodebuild -version | head -1 | sed -E 's/Xcode ([0-9]+).*/\1/')
-          if [ "$major" -lt 16 ]; then
-            echo "::error::需要 Xcode 16 或更高（工程用了文件系统同步分组），当前为 $major"
+          major="$(printf '%s\n' "$version_output" | sed -n '1s/^Xcode \([0-9][0-9]*\).*/\1/p')"
+          if [ -z "$major" ] || [ "$major" -lt 16 ]; then
+            echo "::error::需要 Xcode 16 或更高（工程用了文件系统同步分组），检测到：${major:-未知}"
             exit 1
           fi
 

@@ -70,10 +70,13 @@ jobs:
         run: |
           set -euo pipefail
           sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          xcodebuild -version
-          major=$(xcodebuild -version | head -1 | sed -E 's/Xcode ([0-9]+).*/\1/')
-          if [ "$major" -lt 16 ]; then
-            echo "::error::需要 Xcode 16 或更高，当前为 $major"
+
+          # 同 build-ipa.yml：不能把 xcodebuild -version 接进 head，会 broken pipe
+          version_output="$(xcodebuild -version)"
+          echo "$version_output"
+          major="$(printf '%s\n' "$version_output" | sed -n '1s/^Xcode \([0-9][0-9]*\).*/\1/p')"
+          if [ -z "$major" ] || [ "$major" -lt 16 ]; then
+            echo "::error::需要 Xcode 16 或更高，检测到：${major:-未知}"
             exit 1
           fi
 
@@ -117,8 +120,10 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$profile" "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
 
-          # 只取带引号的证书名，避免把 "0 valid identities found" 这类汇总行当成身份
-          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"[^"]*"' | head -1 | tr -d '"')
+          # 只取带引号的证书名，避免把 "0 valid identities found" 这类汇总行当成身份。
+          # 先整段捕获再解析，sed 会读完整个流，不会像 head 那样提前关管道。
+          identities="$(security find-identity -v -p codesigning "$keychain" || true)"
+          identity="$(printf '%s\n' "$identities" | sed -n 's/.*"\(.*\)".*/\1/p' | sed -n '1p')"
           if [ -z "$identity" ]; then
             echo "::error::临时钥匙串里没有可用的签名证书，检查 .p12 和密码"
             exit 1
@@ -183,8 +188,15 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/export"
 
-          ipa=$(ls "$RUNNER_TEMP/export"/*.ipa | head -1)
-          size=$(du -h "$ipa" | cut -f1)
+          # 用 glob 取第一个，避免 ls | head 的管道问题
+          ipa=""
+          for f in "$RUNNER_TEMP/export"/*.ipa; do ipa="$f"; break; done
+          if [ -z "$ipa" ] || [ ! -f "$ipa" ]; then
+            echo "::error::导出目录里没有 .ipa"
+            ls -R "$RUNNER_TEMP/export" || true
+            exit 1
+          fi
+          size="$(du -h "$ipa" | cut -f1)"
           echo "ipa=$ipa" >> "$GITHUB_OUTPUT"
           echo "### 签名构建完成 :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
           echo "- 导出方式：\`${{ inputs.export_method }}\`（${size}）" >> "$GITHUB_STEP_SUMMARY"
