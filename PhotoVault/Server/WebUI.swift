@@ -285,8 +285,9 @@ function renderToolbar(){
   if(view.level === 'groups'){
     html = `<button class="btn primary" onclick="promptCreateGroup()">${plus}新建分组</button>`;
   }else if(view.level === 'folders'){
-    html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`
-         + `<button class="btn" onclick="promptCreateGroup()">新建分组</button>`;
+    // 分组内部只提供「新建目录」。新建分组是上一层的事，
+    // 放在这里既和当前上下文无关，也会让层级看着混乱。
+    html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`;
   }else{
     html = `<button class="btn primary" onclick="filePick()">${plus}选择图片上传</button>`;
   }
