@@ -243,6 +243,21 @@ struct RootView: View {
             } label: {
                 Label("WiFi 上传", systemImage: "wifi")
             }
+
+            Divider()
+
+            Menu {
+                Picker("外观", selection: Binding(
+                    get: { store.appearance },
+                    set: { store.appearance = $0 }
+                )) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Label(theme.title, systemImage: theme.icon).tag(theme)
+                    }
+                }
+            } label: {
+                Label("外观：\(store.appearance.title)", systemImage: store.appearance.icon)
+            }
         } label: {
             Image(systemName: "plus").circleIcon()
         }

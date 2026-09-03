@@ -89,6 +89,11 @@ final class LibraryStore {
         set { library.folderSort = newValue; scheduleSave() }
     }
 
+    var appearance: AppTheme {
+        get { library.appearance }
+        set { library.appearance = newValue; scheduleSave() }
+    }
+
     var totalPhotoCount: Int { library.groups.reduce(0) { $0 + $1.photoCount } }
 
     func group(_ id: UUID) -> PhotoGroup? {

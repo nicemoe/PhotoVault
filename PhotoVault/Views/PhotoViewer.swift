@@ -38,7 +38,7 @@ struct PhotoViewer: View {
         let position = live.firstIndex { $0.id == current?.id }
 
         ZStack {
-            Color.black.ignoresSafeArea()
+            Theme.viewerBackground.ignoresSafeArea()
 
             TabView(selection: $currentID) {
                 ForEach(live) { asset in
@@ -106,9 +106,9 @@ struct PhotoViewer: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.viewerLabel)
                     .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.16), in: Circle())
+                    .background(Theme.viewerControl.opacity(0.1), in: Circle())
             }
 
             Spacer()
@@ -116,10 +116,10 @@ struct PhotoViewer: View {
             if total > 0 {
                 Text("\((position ?? 0) + 1) / \(total)")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.viewerLabel)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.16), in: Capsule())
+                    .background(Theme.viewerControl.opacity(0.1), in: Capsule())
             }
 
             Spacer()
@@ -129,10 +129,10 @@ struct PhotoViewer: View {
             } label: {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isPlaying ? Color.white : Theme.viewerLabel)
                     .frame(width: 36, height: 36)
                     .background(
-                        Circle().fill(isPlaying ? Theme.accent : Color.white.opacity(0.16))
+                        Circle().fill(isPlaying ? Theme.accent : Theme.viewerControl.opacity(0.1))
                     )
             }
             .disabled(total < 2)
@@ -156,7 +156,11 @@ struct PhotoViewer: View {
     private func bottomBar(_ current: Asset?) -> some View {
         HStack(spacing: 26) {
             if let asset = current {
-                ShareLink(item: LibraryStore.fileURL(for: asset)) {
+                // 不用 ShareLink：它在 fullScreenCover 里经常唤不起系统分享面板。
+                // 直接用 UIKit 从最上层的 controller present，行为可控。
+                Button {
+                    ShareSheet.present(fileURL: LibraryStore.fileURL(for: asset))
+                } label: {
                     viewerIcon("square.and.arrow.up")
                 }
 
@@ -169,7 +173,7 @@ struct PhotoViewer: View {
                         .font(.system(size: 11))
                         .opacity(0.7)
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.viewerLabel)
 
                 Spacer()
 
@@ -183,14 +187,14 @@ struct PhotoViewer: View {
         .padding(.horizontal, 26)
         .padding(.vertical, 14)
         .background(.ultraThinMaterial)
-        .environment(\.colorScheme, .dark)
     }
 
     private func viewerIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .medium))
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
+            .foregroundStyle(Theme.viewerLabel)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())   // 让整个方框可点，而不是只有图标的不透明像素
     }
 
     private func byteText(_ bytes: Int) -> String {
@@ -215,7 +219,7 @@ struct ZoomableImage: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Color.black
+                Theme.viewerBackground
                 if let image {
                     Image(uiImage: image)
                         .resizable()
@@ -224,7 +228,7 @@ struct ZoomableImage: View {
                         .offset(offset)
                 } else {
                     ProgressView()
-                        .tint(.white)
+                        .tint(Theme.viewerLabel)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -284,5 +288,49 @@ struct ZoomableImage: View {
             .onEnded { _ in
                 steadyOffset = offset
             }
+    }
+}
+
+// MARK: - 系统分享面板
+
+/// SwiftUI 的 ShareLink 在 fullScreenCover 里经常不弹面板，
+/// 这里直接找到最上层的 view controller 自己 present。
+enum ShareSheet {
+
+    @MainActor
+    static func present(fileURL: URL) {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        present(items: [fileURL])
+    }
+
+    @MainActor
+    static func present(items: [Any]) {
+        guard let top = topViewController() else { return }
+
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+
+        // iPad 上不给锚点会直接崩
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = top.view
+            popover.sourceRect = CGRect(x: top.view.bounds.midX,
+                                        y: top.view.bounds.maxY - 60,
+                                        width: 1, height: 1)
+            popover.permittedArrowDirections = []
+        }
+
+        top.present(controller, animated: true)
+    }
+
+    @MainActor
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        guard var top = scene?.keyWindow?.rootViewController else { return nil }
+
+        // fullScreenCover 自己就是一层 presented controller，要一直找到最上面那层
+        while let presented = top.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        return top
     }
 }

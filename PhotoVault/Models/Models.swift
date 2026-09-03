@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI   // AppTheme 要用 ColorScheme
 
 // MARK: - 图片
 
@@ -84,15 +85,51 @@ enum SortMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - 外观
+
+enum AppTheme: String, Codable, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .light:  return "浅色"
+        case .dark:   return "深色"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light:  return "sun.max"
+        case .dark:   return "moon"
+        }
+    }
+
+    /// nil 表示交给系统决定
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}
+
 // MARK: - 持久化根对象
 
 struct Library: Codable {
     var groups: [PhotoGroup] = []
     var groupSort: SortMode = .manual
     var folderSort: SortMode = .manual
+    var appearance: AppTheme = .system
 
     enum CodingKeys: String, CodingKey {
-        case groups, groupSort, folderSort
+        case groups, groupSort, folderSort, appearance
     }
 
     init() {}
@@ -102,6 +139,7 @@ struct Library: Codable {
         groups = try c.decodeIfPresent([PhotoGroup].self, forKey: .groups) ?? []
         groupSort = try c.decodeIfPresent(SortMode.self, forKey: .groupSort) ?? .manual
         folderSort = try c.decodeIfPresent(SortMode.self, forKey: .folderSort) ?? .manual
+        appearance = try c.decodeIfPresent(AppTheme.self, forKey: .appearance) ?? .system
     }
 }
 

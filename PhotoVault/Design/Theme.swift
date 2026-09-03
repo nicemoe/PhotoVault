@@ -57,6 +57,17 @@ enum Theme {
 
     static let danger = Color(light: 0xE8453C, dark: 0xFF6B60)
 
+    // MARK: 全屏预览
+    //
+    // 预览页不要写死黑色：浅色主题下四周应该是白的，否则和整个 App 割裂。
+
+    /// 图片四周的底色
+    static let viewerBackground = Color(light: 0xFFFFFF, dark: 0x000000)
+    /// 预览页上的图标和文字
+    static let viewerLabel = Color(light: 0x1B1F27, dark: 0xFFFFFF)
+    /// 预览页上圆形按钮的底
+    static let viewerControl = Color(light: 0x000000, dark: 0xFFFFFF)
+
     // MARK: 圆角
 
     enum Radius {

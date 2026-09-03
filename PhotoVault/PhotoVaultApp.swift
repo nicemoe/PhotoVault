@@ -18,6 +18,8 @@ struct PhotoVaultApp: App {
                 .environment(store)
                 .environment(wifi)
                 .tint(Theme.accent)
+                // 放在根上，sheet / fullScreenCover 都会跟着走
+                .preferredColorScheme(store.appearance.colorScheme)
         }
     }
 }
