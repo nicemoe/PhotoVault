@@ -97,7 +97,7 @@ struct RootView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 6) {
-                        appearanceMenu
+                        sideMenu
 
                         if wifi.isRunning {
                             Button {
@@ -257,15 +257,13 @@ struct RootView: View {
         }
     }
 
-    // MARK: 外观切换
+    // MARK: 左上角菜单
     //
-    // 单独放在左上角，不塞进加号菜单——加号的语义是「添加」，不是「设置」。
-    //
-    // 按钮图标固定不变：按钮是靠形状被认出来的，让它在三个不相干的轮廓之间
-    // 跳变反而不好认；当前是浅是深，看 App 本身就知道，不需要图标再表达一遍。
-    // 具体选中哪一项由菜单里的对勾体现。
+    // 三条杠是「容器」语义，不需要表达里面装了什么，所以不用再纠结
+    // 「哪个图标代表外观」；以后要加别的设置也有地方放。
+    // 加号保持纯粹的「添加」，两者语义不重叠。
 
-    private var appearanceMenu: some View {
+    private var sideMenu: some View {
         Menu {
             // .inline 让三个选项直接铺开，标题留空就不会多出一行表头
             Picker("", selection: Binding(
@@ -278,7 +276,8 @@ struct RootView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Image(systemName: "paintpalette").circleIcon(glyph: 13.5)
+            // 和排序图标一样是宽字形，字号要比 plus 小一档才不显得撑
+            Image(systemName: "line.3.horizontal").circleIcon(glyph: 12.5)
         }
     }
 
