@@ -278,7 +278,9 @@ struct RootView: View {
                 }
                 .pickerStyle(.inline)
             } label: {
-                Label("外观", systemImage: "circle.lefthalf.filled")
+                // 一级条目直接显示当前选中的值（跟随系统 / 浅色 / 深色），
+                // 不要再加「外观」前缀——展开后的对勾已经说明了它是什么
+                Label(store.appearance.title, systemImage: store.appearance.icon)
             }
         } label: {
             // 三条杠是线条型字形：字重给 medium 让线之间透气，
