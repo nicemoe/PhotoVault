@@ -19,9 +19,10 @@ struct GroupDetailView: View {
     @State private var screenWidth: CGFloat = 0
 
     private var layout: CardGridLayout {
-        CardGridLayout(contentWidth: max(0, screenWidth - Theme.Metric.margin * 2),
-                   gap: Theme.Metric.cardGap,
-                   preferredItemWidth: 190)
+        let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
+        return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
+                              gap: Theme.Metric.cardGap,
+                              preferredItemWidth: 190)
     }
 
     private var group: PhotoGroup? { store.group(groupID) }
@@ -45,7 +46,7 @@ struct GroupDetailView: View {
                             showCreateFolder = true
                         }
                         .padding(.top, 20)
-                    } else if screenWidth > 0 {
+                    } else {
                         LazyVGrid(columns: layout.columns, spacing: 20) {
                             ForEach(group.folders.sorted(by: store.folderSort)) { folder in
                                 Button {
@@ -77,24 +78,26 @@ struct GroupDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                SortMenu(mode: $store.folderSort) { showReorder = true }
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 0) {
+                    SortMenu(mode: $store.folderSort) { showReorder = true }
 
-                Menu {
-                    Button {
-                        newFolderName = ""
-                        showCreateFolder = true
+                    Menu {
+                        Button {
+                            newFolderName = ""
+                            showCreateFolder = true
+                        } label: {
+                            Label("新建目录", systemImage: "folder.badge.plus")
+                        }
+                        Divider()
+                        Button {
+                            showWiFi = true
+                        } label: {
+                            Label("WiFi 上传", systemImage: "wifi")
+                        }
                     } label: {
-                        Label("新建目录", systemImage: "folder.badge.plus")
+                        Image(systemName: "plus").circleIcon()
                     }
-                    Divider()
-                    Button {
-                        showWiFi = true
-                    } label: {
-                        Label("WiFi 上传", systemImage: "wifi")
-                    }
-                } label: {
-                    Image(systemName: "plus").circleIcon()
                 }
             }
         }

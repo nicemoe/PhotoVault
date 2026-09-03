@@ -26,6 +26,21 @@ extension View {
     }
 }
 
+enum ScreenMetrics {
+    /// 还没量到容器宽度时的兜底值。
+    ///
+    /// 绝对不要用「量到宽度」当渲染开关：内容不渲染 → ScrollView 没内容 →
+    /// 背景里的 GeometryReader 量到 0 → 内容继续不渲染，直接死锁成白屏。
+    /// 宁可先按兜底宽度画一帧，量准了再自动纠正。
+    @MainActor
+    static var fallbackWidth: CGFloat {
+        let width = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.windows.first?.bounds.width }
+            .first
+        return width ?? 393
+    }
+}
+
 /// 由容器宽度推出卡片网格的列数与边长
 struct CardGridLayout {
     var columnCount: Int

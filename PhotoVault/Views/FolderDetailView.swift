@@ -21,9 +21,10 @@ struct FolderDetailView: View {
     @State private var screenWidth: CGFloat = 0
 
     private var layout: CardGridLayout {
-        CardGridLayout(contentWidth: max(0, screenWidth - Theme.Metric.margin * 2),
-                   gap: Theme.Metric.photoGap,
-                   fixedColumns: 3)
+        let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
+        return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
+                              gap: Theme.Metric.photoGap,
+                              fixedColumns: 3)
     }
 
     private var folder: Folder? { store.folder(folderID) }
@@ -42,7 +43,7 @@ struct FolderDetailView: View {
                         showPhotoPicker = true
                     }
                     .padding(.top, 40)
-                } else if screenWidth > 0 {
+                } else {
                     LazyVGrid(columns: layout.columns, spacing: Theme.Metric.photoGap) {
                         ForEach(assets) { asset in
                             photoCell(asset)
@@ -65,39 +66,43 @@ struct FolderDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if isSelecting {
-                    Button("完成") {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            isSelecting = false
-                            selection.removeAll()
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 0) {
+                    if isSelecting {
+                        Button("完成") {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                isSelecting = false
+                                selection.removeAll()
+                            }
                         }
-                    }
-                    .font(.system(size: 16, weight: .semibold))
-                } else {
-                    if !(folder?.assets.isEmpty ?? true) {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.18)) { isSelecting = true }
-                        } label: {
-                            Image(systemName: "checkmark.circle").circleIcon()
+                        .font(.system(size: 16, weight: .semibold))
+                    } else {
+                        if !(folder?.assets.isEmpty ?? true) {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.18)) { isSelecting = true }
+                            } label: {
+                                // 用纯 checkmark，不要 checkmark.circle——
+                                // 外面已经有圆底了，再套一个圆就是圆中圆
+                                Image(systemName: "checkmark").circleIcon(glyph: 13)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
 
-                    Menu {
-                        Button {
-                            showPhotoPicker = true
+                        Menu {
+                            Button {
+                                showPhotoPicker = true
+                            } label: {
+                                Label("从相册导入图片", systemImage: "photo.on.rectangle.angled")
+                            }
+                            Divider()
+                            Button {
+                                showWiFi = true
+                            } label: {
+                                Label("WiFi 上传", systemImage: "wifi")
+                            }
                         } label: {
-                            Label("从相册导入图片", systemImage: "photo.on.rectangle.angled")
+                            Image(systemName: "plus").circleIcon()
                         }
-                        Divider()
-                        Button {
-                            showWiFi = true
-                        } label: {
-                            Label("WiFi 上传", systemImage: "wifi")
-                        }
-                    } label: {
-                        Image(systemName: "plus").circleIcon()
                     }
                 }
             }

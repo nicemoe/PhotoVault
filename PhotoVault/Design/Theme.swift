@@ -142,8 +142,10 @@ struct CircleIconLook: ViewModifier {
     var glyphSize: CGFloat
     /// 可视圆直径
     var diameter: CGFloat = 30
-    /// 触摸区域，比可视圆大一圈，避免圆变小之后不好点
-    var hitSize: CGFloat = 40
+    /// 触摸区域，比可视圆大一圈，避免圆变小之后不好点。
+    /// 相邻两个按钮用 HStack(spacing: 0) 摆放时，可视圆之间的间距就等于
+    /// hitSize - diameter = 8pt，不用再另外调 spacing。
+    var hitSize: CGFloat = 38
 
     func body(content: Content) -> some View {
         content
