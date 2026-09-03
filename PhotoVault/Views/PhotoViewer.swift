@@ -6,13 +6,18 @@ struct PhotoViewer: View {
     let startIndex: Int
     let folderID: UUID
 
+    /// 幻灯片切换间隔
+    private static let slideInterval: Duration = .seconds(5)
+
     @Environment(LibraryStore.self) private var store
+    @Environment(WiFiService.self) private var wifi
     @Environment(\.dismiss) private var dismiss
 
     // 用 id 而不是下标做 selection：删掉中间某张后下标会整体前移，翻页会串图
     @State private var currentID: UUID?
     @State private var showChrome = true
     @State private var showDeleteConfirm = false
+    @State private var isPlaying = false
 
     init(assets: [Asset], startIndex: Int, folderID: UUID) {
         self.assets = assets
@@ -37,8 +42,12 @@ struct PhotoViewer: View {
 
             TabView(selection: $currentID) {
                 ForEach(live) { asset in
-                    ZoomableImage(asset: asset)
-                        .tag(Optional(asset.id))
+                    // 单击切换工具栏的手势挂在图片上，不能挂在外层 ZStack：
+                    // 挂外层会盖住上下两条栏，把分享、删除这些按钮的点击吞掉。
+                    ZoomableImage(asset: asset) {
+                        withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+                    }
+                    .tag(Optional(asset.id))
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -54,8 +63,22 @@ struct PhotoViewer: View {
             }
         }
         .statusBarHidden(!showChrome)
-        .onTapGesture {
-            withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+        // 幻灯片：isPlaying 变化时 task 重启，停止时自动取消
+        .task(id: isPlaying) {
+            guard isPlaying else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.slideInterval)
+                guard !Task.isCancelled, isPlaying else { return }
+                advance()
+            }
+        }
+        .onChange(of: isPlaying) { _, playing in
+            // WiFi 传输也会占用这个开关，关掉时要考虑它还开着的情况
+            UIApplication.shared.isIdleTimerDisabled = playing || wifi.isRunning
+        }
+        .onDisappear {
+            isPlaying = false
+            UIApplication.shared.isIdleTimerDisabled = wifi.isRunning
         }
         .confirmationDialog("删除这张照片？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
@@ -101,10 +124,31 @@ struct PhotoViewer: View {
 
             Spacer()
 
-            Color.clear.frame(width: 36, height: 36)
+            Button {
+                isPlaying.toggle()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Circle().fill(isPlaying ? Theme.accent : Color.white.opacity(0.16))
+                    )
+            }
+            .disabled(total < 2)
+            .opacity(total < 2 ? 0.35 : 1)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// 幻灯片下一张，到末尾回到第一张
+    private func advance() {
+        let live = liveAssets
+        guard live.count > 1 else { return }
+        let index = live.firstIndex { $0.id == currentID } ?? 0
+        let next = live[(index + 1) % live.count]
+        withAnimation(.easeInOut(duration: 0.35)) { currentID = next.id }
     }
 
     // MARK: 底栏
@@ -159,6 +203,8 @@ struct PhotoViewer: View {
 struct ZoomableImage: View {
 
     let asset: Asset
+    /// 单击（用来切换工具栏的显示）。放在这里而不是外层，避免和上下栏的按钮抢点击。
+    var onSingleTap: () -> Void = {}
 
     @State private var image: UIImage?
     @State private var scale: CGFloat = 1
@@ -185,6 +231,7 @@ struct ZoomableImage: View {
             .contentShape(Rectangle())
             .gesture(magnifyGesture)
             .simultaneousGesture(panGesture, including: scale > 1.01 ? .all : .subviews)
+            // 双击必须声明在单击之前，否则单击会先把手势吃掉
             .onTapGesture(count: 2) {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
                     if scale > 1.01 {
@@ -195,6 +242,7 @@ struct ZoomableImage: View {
                     }
                 }
             }
+            .onTapGesture { onSingleTap() }
         }
         .task(id: asset.id) {
             let url = LibraryStore.fileURL(for: asset)

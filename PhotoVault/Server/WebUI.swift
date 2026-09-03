@@ -53,8 +53,8 @@ header{
 /* 工具条 */
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:12px 0 18px}
 .btn{
-  display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 16px;
-  border-radius:12px;background:var(--fill);font-weight:600;font-size:14px;
+  display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 14px;
+  border-radius:10px;background:var(--fill);font-weight:600;font-size:13.5px;
   transition:transform .12s ease,opacity .12s ease;
 }
 .btn:active{transform:scale(.97)}
@@ -83,7 +83,7 @@ header{
 .cname{font-weight:650;font-size:14.5px;letter-spacing:-.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .cmeta{font-size:12.5px;color:var(--sub);margin-top:2px}
 .cactions{display:flex;gap:4px;margin-top:10px;flex-wrap:wrap}
-.mini{height:29px;padding:0 10px;border-radius:9px;background:var(--fill);font-size:12.5px;font-weight:600;color:var(--sub)}
+.mini{height:26px;padding:0 10px;border-radius:8px;background:var(--fill);font-size:12.5px;font-weight:600;color:var(--sub)}
 .mini:active{transform:scale(.96)}
 .mini.danger{color:var(--danger)}
 
