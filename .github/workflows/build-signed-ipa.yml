@@ -40,9 +40,9 @@ jobs:
     timeout-minutes: 40
 
     env:
-      PROJECT: PhotoVault.xcodeproj
-      SCHEME: PhotoVault
-      APP_NAME: PhotoVault
+      PROJECT: Photo.xcodeproj
+      SCHEME: Photo
+      APP_NAME: Photo
 
     steps:
       - name: 检出代码

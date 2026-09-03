@@ -1,4 +1,4 @@
-# PhotoVault · 分组相册
+# Photo · 分组相册
 
 一个 iOS 相册 App：**分组 → 目录 → 图片** 三层结构，支持从系统相册导入，也支持在同一 WiFi 下用浏览器上传和管理。
 
@@ -9,11 +9,11 @@
 ## 打开与运行
 
 ```bash
-open PhotoVault.xcodeproj
+open Photo.xcodeproj
 ```
 
 1. 用 **Xcode 16 及以上**打开（项目用了 Xcode 16 的「文件系统同步分组」，新增文件不用手动加进工程）。
-2. 选中 `PhotoVault` target → **Signing & Capabilities** → 填自己的 Team，把 Bundle Identifier 改成唯一的（默认是 `com.example.photovault`）。
+2. 选中 `Photo` target → **Signing & Capabilities** → 填自己的 Team（Bundle Identifier 已是 `cn.nicemoe.photo`，换成你自己的也可以）。
 3. 选真机运行。
 
 > WiFi 上传必须用**真机**：模拟器和电脑共用网卡，地址不是手机的局域网地址。
@@ -90,7 +90,7 @@ open PhotoVault.xcodeproj
 
 圆角：卡片 22 / 封面 18 / 照片格 12 / 按钮 14。边距：屏幕 20，卡片间距 14，照片间距 4。
 
-全部集中在 [Theme.swift](PhotoVault/Design/Theme.swift)，改一处全局生效。
+全部集中在 [Theme.swift](Photo/Design/Theme.swift)，改一处全局生效。
 
 ---
 
@@ -98,8 +98,8 @@ open PhotoVault.xcodeproj
 
 ```
 Config/Info.plist                权限声明等（在 Xcode 的 Config 组里可以直接改）
-PhotoVault/
-├── PhotoVaultApp.swift          App 入口 + 导航路由
+Photo/
+├── PhotoApp.swift               App 入口 + 导航路由
 ├── Assets.xcassets              App 图标（1024 纯色扁平）+ 强调色
 ├── Design/Theme.swift           设计令牌：颜色 / 圆角 / 间距 / 按钮样式
 ├── Models/

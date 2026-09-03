@@ -378,6 +378,6 @@ enum UIDeviceName {
     static var current: String {
         let raw = ProcessInfo.processInfo.hostName
             .replacingOccurrences(of: ".local", with: "")
-        return raw.isEmpty ? "PhotoVault" : "PhotoVault (\(raw))"
+        return raw.isEmpty ? "Photo" : "Photo (\(raw))"
     }
 }

@@ -7,12 +7,12 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		1A0000000000000000000005 /* PhotoVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000005 /* Photo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A0000000000000000000009 /* PhotoVault */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = PhotoVault; sourceTree = "<group>"; };
+		1A0000000000000000000009 /* Photo */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Photo; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -29,7 +29,7 @@
 		1A0000000000000000000002 = {
 			isa = PBXGroup;
 			children = (
-				1A0000000000000000000009 /* PhotoVault */,
+				1A0000000000000000000009 /* Photo */,
 				1A0000000000000000000011 /* Config */,
 				1A0000000000000000000003 /* Products */,
 			);
@@ -46,7 +46,7 @@
 		1A0000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				1A0000000000000000000005 /* PhotoVault.app */,
+				1A0000000000000000000005 /* Photo.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -54,9 +54,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		1A0000000000000000000004 /* PhotoVault */ = {
+		1A0000000000000000000004 /* Photo */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 1A000000000000000000000D /* Build configuration list for PBXNativeTarget "PhotoVault" */;
+			buildConfigurationList = 1A000000000000000000000D /* Build configuration list for PBXNativeTarget "Photo" */;
 			buildPhases = (
 				1A0000000000000000000006 /* Sources */,
 				1A0000000000000000000007 /* Frameworks */,
@@ -67,13 +67,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				1A0000000000000000000009 /* PhotoVault */,
+				1A0000000000000000000009 /* Photo */,
 			);
-			name = PhotoVault;
+			name = Photo;
 			packageProductDependencies = (
 			);
-			productName = PhotoVault;
-			productReference = 1A0000000000000000000005 /* PhotoVault.app */;
+			productName = Photo;
+			productReference = 1A0000000000000000000005 /* Photo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -91,7 +91,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 1A000000000000000000000A /* Build configuration list for PBXProject "PhotoVault" */;
+			buildConfigurationList = 1A000000000000000000000A /* Build configuration list for PBXProject "Photo" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -106,7 +106,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				1A0000000000000000000004 /* PhotoVault */,
+				1A0000000000000000000004 /* Photo */,
 			);
 		};
 /* End PBXProject section */
@@ -243,7 +243,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.photovault;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.photo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -267,7 +267,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.photovault;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.nicemoe.photo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -278,7 +278,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1A000000000000000000000A /* Build configuration list for PBXProject "PhotoVault" */ = {
+		1A000000000000000000000A /* Build configuration list for PBXProject "Photo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1A000000000000000000000B /* Debug */,
@@ -287,7 +287,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		1A000000000000000000000D /* Build configuration list for PBXNativeTarget "PhotoVault" */ = {
+		1A000000000000000000000D /* Build configuration list for PBXNativeTarget "Photo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1A000000000000000000000E /* Debug */,

@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "1A0000000000000000000004"
-               BuildableName = "PhotoVault.app"
-               BlueprintName = "PhotoVault"
-               ReferencedContainer = "container:PhotoVault.xcodeproj">
+               BuildableName = "Photo.app"
+               BlueprintName = "Photo"
+               ReferencedContainer = "container:Photo.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -45,9 +45,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1A0000000000000000000004"
-            BuildableName = "PhotoVault.app"
-            BlueprintName = "PhotoVault"
-            ReferencedContainer = "container:PhotoVault.xcodeproj">
+            BuildableName = "Photo.app"
+            BlueprintName = "Photo"
+            ReferencedContainer = "container:Photo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -62,9 +62,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1A0000000000000000000004"
-            BuildableName = "PhotoVault.app"
-            BlueprintName = "PhotoVault"
-            ReferencedContainer = "container:PhotoVault.xcodeproj">
+            BuildableName = "Photo.app"
+            BlueprintName = "Photo"
+            ReferencedContainer = "container:Photo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

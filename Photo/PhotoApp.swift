@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct PhotoVaultApp: App {
+struct PhotoApp: App {
 
     @State private var store: LibraryStore
     @State private var wifi: WiFiService
