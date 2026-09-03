@@ -265,8 +265,8 @@ struct RootView: View {
 
     private var sideMenu: some View {
         Menu {
-            // 「外观」作为一个条目，点开才是三个选项。
-            // 不把三个选项直接铺在这一层，是为了给后续功能留位置。
+            // 外观作为一个条目收在这里，点开才是三个选项。
+            // 不把三个选项直接铺在第一层，是为了给后续功能留位置。
             Menu {
                 Picker("", selection: Binding(
                     get: { store.appearance },
