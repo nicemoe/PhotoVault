@@ -76,7 +76,9 @@ final class WiFiService {
                 return .notFound
             }
             let wantsThumb = request.path == "/thumb"
-            let size = Int(request.query["s"] ?? "") ?? 420
+            // 尺寸也来自网络。不夹上界的话 /thumb?s=99999999 会让缩略图退化成
+            // 整图解码再重新编码，真机上足以触发内存回收。
+            let size = min(max(Int(request.query["s"] ?? "") ?? 420, 32), 2048)
             return await Task.detached(priority: .userInitiated) { () -> HTTPResponse in
                 if wantsThumb {
                     guard let data = ThumbnailCache.shared.thumbnailData(for: asset, maxPixel: size) else {

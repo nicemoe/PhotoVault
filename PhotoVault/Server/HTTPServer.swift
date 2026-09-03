@@ -290,7 +290,11 @@ private final class HTTPConnection {
             headers[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
 
-        let length = Int(headers["content-length"] ?? "0") ?? 0
+        // Content-Length 直接来自网络，负数是合法的 Int 字面量。
+        // 负数会一路带到 buffer.prefix(_:) / removeFirst(_:)，这两个对负数是
+        // _precondition，Release 构建也照样 trap，所以必须在这里夹住。
+        // （溢出的超大值 Int(_:) 会返回 nil，被 ?? 0 兜住。）
+        let length = max(0, Int(headers["content-length"] ?? "0") ?? 0)
         guard length <= Self.maxBodyBytes else {
             send(.text("413 Payload Too Large", status: 413), keepAlive: false)
             return false
