@@ -89,8 +89,10 @@ jobs:
           size=$(du -h "$RUNNER_TEMP/$APP_NAME-unsigned.ipa" | cut -f1)
           echo "ipa=$RUNNER_TEMP/$APP_NAME-unsigned.ipa" >> "$GITHUB_OUTPUT"
           echo "size=$size" >> "$GITHUB_OUTPUT"
+          # 变量后面紧跟中文标点时必须加大括号：runner 的 bash 会把中文字节
+          # 当成变量名的一部分，配合 set -u 会报 "size?: unbound variable"
           echo "### 构建完成 :package:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 文件：\`$APP_NAME-unsigned.ipa\`（$size，未签名）" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 文件：\`${APP_NAME}-unsigned.ipa\`（${size}，未签名）" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build 号：${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传构建产物

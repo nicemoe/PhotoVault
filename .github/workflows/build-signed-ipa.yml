@@ -33,7 +33,9 @@ permissions:
 
 jobs:
   build:
-    name: 签名 IPA（${{ inputs.export_method }}）
+    # 这里不要写 ${{ inputs.* }}：GitHub 每次 push 都会校验所有工作流文件，
+    # 而 push 事件下没有 inputs 上下文，job 名又是解析期就求值的，会被判成非法工作流。
+    name: 签名 IPA
     runs-on: macos-15
     timeout-minutes: 40
 
@@ -185,7 +187,7 @@ jobs:
           size=$(du -h "$ipa" | cut -f1)
           echo "ipa=$ipa" >> "$GITHUB_OUTPUT"
           echo "### 签名构建完成 :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 导出方式：\`${{ inputs.export_method }}\`（$size）" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 导出方式：\`${{ inputs.export_method }}\`（${size}）" >> "$GITHUB_STEP_SUMMARY"
           echo "- Bundle ID：\`${{ steps.signing.outputs.bundle }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build 号：${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
 
