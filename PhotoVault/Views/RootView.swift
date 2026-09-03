@@ -95,20 +95,24 @@ struct RootView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {
-                if wifi.isRunning {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showWiFi = true
-                        } label: {
-                            HStack(spacing: 5) {
-                                Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
-                                Text("传输中")
-                                    .font(.system(size: 12.5, weight: .semibold))
+                ToolbarItem(placement: .topBarLeading) {
+                    HStack(spacing: 6) {
+                        appearanceMenu
+
+                        if wifi.isRunning {
+                            Button {
+                                showWiFi = true
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
+                                    Text("传输中")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                }
+                                .foregroundStyle(Theme.secondaryLabel)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Theme.fill, in: Capsule())
                             }
-                            .foregroundStyle(Theme.secondaryLabel)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Theme.fill, in: Capsule())
                         }
                     }
                 }
@@ -248,10 +252,19 @@ struct RootView: View {
                 Label("WiFi 上传", systemImage: "wifi")
             }
 
-            Divider()
+        } label: {
+            Image(systemName: "plus").circleIcon()
+        }
+    }
 
-            // .inline 让三个选项直接铺在菜单里，而不是收进「外观」子菜单；
-            // 标题留空就不会多出一行表头
+    // MARK: 外观切换
+    //
+    // 单独放在左上角，不塞进加号菜单——加号的语义是「添加」，不是「设置」。
+    // 图标本身跟着当前外观变，一眼能看出处于哪个模式。
+
+    private var appearanceMenu: some View {
+        Menu {
+            // .inline 让三个选项直接铺开，标题留空就不会多出一行表头
             Picker("", selection: Binding(
                 get: { store.appearance },
                 set: { store.appearance = $0 }
@@ -262,7 +275,7 @@ struct RootView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Image(systemName: "plus").circleIcon()
+            Image(systemName: store.appearance.icon).circleIcon(glyph: 13.5)
         }
     }
 
