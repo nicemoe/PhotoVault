@@ -44,6 +44,21 @@ header{
 .hsub{font-size:12.5px;color:var(--sub);margin-top:1px}
 .spacer{flex:1}
 
+/* 相册 / 书架 切换 */
+.tabs{display:flex;gap:2px;background:var(--fill);border-radius:10px;padding:2px;margin-right:10px}
+.tab{height:28px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:600;color:var(--sub)}
+.tab.on{background:var(--surface);color:var(--text)}
+
+/* 书卡片 */
+.books{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.book{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;
+  display:flex;flex-direction:column;gap:4px}
+.book .btitle{font-weight:650;font-size:15px;line-height:1.35}
+.book .bmeta{font-size:12.5px;color:var(--sub)}
+.book .bfmt{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:var(--accent);
+  border-radius:999px;padding:2px 7px;margin-bottom:6px;align-self:flex-start}
+.book .bactions{margin-top:auto;padding-top:10px}
+
 /* 面包屑 */
 .crumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:14px 0 4px;font-size:13.5px;color:var(--sub)}
 .crumbs button{color:var(--accent);font-weight:600}
@@ -187,6 +202,10 @@ header{
       <div class="hsub" id="devinfo">连接中…</div>
     </div>
     <div class="spacer"></div>
+    <div class="tabs">
+      <button id="tabPhotos" class="tab on" onclick="switchSection('photos')">相册</button>
+      <button id="tabBooks" class="tab" onclick="switchSection('books')">书架</button>
+    </div>
     <button class="mini" onclick="load()">刷新</button>
   </div>
 </header>
@@ -216,10 +235,13 @@ header{
 
 <script>
 let state = {groups: []};
-let view = {level: 'groups', groupId: null, folderId: null};
+let books = [];
+// section 决定顶层显示相册还是书架；level 只在相册里有意义
+let view = {section: 'photos', level: 'groups', groupId: null, folderId: null};
 let folderCache = null;
 
 const ICON = {
+  book:   '<svg viewBox="0 0 24 24"><path d="M5 3h11a3 3 0 0 1 3 3v15H8a3 3 0 0 1-3-3V3zm2 2v13a1 1 0 0 0 1 1h9V6a1 1 0 0 0-1-1H7z"/></svg>',
   image:  '<svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v9.2l4.2-4.2 3.6 3.6L15.4 11l4.6 4.6V6H4zm4.6 1a1.7 1.7 0 1 1 0 3.4 1.7 1.7 0 0 1 0-3.4z"/></svg>',
   folder: '<svg viewBox="0 0 24 24"><path d="M3 4h6l2 2h10a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>',
   photo:  '<svg viewBox="0 0 24 24"><path d="M9 3h6l1.5 2H20a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h3.5L9 3zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10z"/></svg>',
@@ -252,7 +274,8 @@ async function load(){
     const res = await fetch('/api/state', {cache:'no-store'});
     state = await res.json();
     $('#devinfo').textContent = `${state.device} · 共 ${state.totalPhotos} 张照片`;
-    if(view.level === 'photos'){
+    await loadBooks();
+    if(view.section === 'photos' && view.level === 'photos'){
       const r = await fetch('/api/folder?id=' + view.folderId, {cache:'no-store'});
       if(r.ok){ folderCache = await r.json(); } else { view = {level:'groups'}; }
     }
@@ -264,6 +287,7 @@ async function load(){
 
 /* ---------- 面包屑 ---------- */
 function renderCrumbs(){
+  if(view.section === 'books'){ $('#crumbs').innerHTML = '<span class="cur">书架</span>'; return; }
   const g = state.groups.find(x => x.id === view.groupId);
   let html = '';
   if(view.level === 'groups'){
@@ -282,6 +306,10 @@ function renderCrumbs(){
 function renderToolbar(){
   const plus = '<svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>';
   let html = '';
+  if(view.section === 'books'){
+    $('#toolbar').innerHTML = `<button class="btn primary" onclick="bookPick()">${plus}上传小说</button>`;
+    return;
+  }
   if(view.level === 'groups'){
     html = `<button class="btn primary" onclick="promptCreateGroup()">${plus}新建分组</button>`;
   }else if(view.level === 'folders'){
@@ -311,6 +339,8 @@ function render(){
   renderCrumbs();
   renderToolbar();
   const main = $('#main');
+
+  if(view.section === 'books'){ renderBooks(main); return; }
 
   if(view.level === 'groups'){
     if(!state.groups.length){
@@ -477,6 +507,117 @@ function closeViewer(){
   $('#viewerImg').src = '';
 }
 
+/* ---------- 书架 ---------- */
+
+function switchSection(section){
+  view.section = section;
+  $('#tabPhotos').classList.toggle('on', section === 'photos');
+  $('#tabBooks').classList.toggle('on', section === 'books');
+  render();
+  window.scrollTo({top:0});
+}
+
+async function loadBooks(){
+  try{
+    const r = await fetch('/api/books', {cache:'no-store'});
+    const j = await r.json();
+    books = j.books || [];
+  }catch(e){ /* 相册功能不该被书架接口失败拖累 */ }
+}
+
+function renderBooks(main){
+  main.innerHTML = `
+    <div class="drop" id="drop">
+      <div class="up">${ICON.upload}</div>
+      <h3>把小说拖到这里上传</h3>
+      <p>支持 TXT 和 EPUB，一次可以拖多本</p>
+      <button class="btn primary" style="display:inline-flex" onclick="bookPick()">选择文件</button>
+    </div>
+    ${books.length ? '<div class="books">' + books.map(b => `
+      <div class="book">
+        <span class="bfmt">${esc(b.format)}</span>
+        <div class="btitle">${esc(b.title)}</div>
+        <div class="bmeta">${b.author ? esc(b.author) + ' · ' : ''}${b.chapters} 章 · ${esc(b.progress)}</div>
+        <div class="bactions">
+          <button class="mini danger" onclick="removeBook('${b.id}')">删除</button>
+        </div>
+      </div>`).join('') + '</div>'
+    : emptyHTML(ICON.book,'书架是空的','上传 TXT 或 EPUB，手机端「书架」里就能读')}
+  `;
+}
+
+async function removeBook(id){
+  const b = books.find(x => x.id === id);
+  if(!confirm(`删除《${b ? b.title : ''}》？阅读进度也会一起清掉。`)) return;
+  await api('/api/book/delete', {id});
+  toast('已删除');
+  await loadBooks();
+  render();
+}
+
+const bookPicker = document.createElement('input');
+bookPicker.type = 'file';
+bookPicker.accept = '.txt,.epub';
+bookPicker.multiple = true;
+bookPicker.onchange = () => { if(bookPicker.files.length) uploadBooks(bookPicker.files); bookPicker.value = ''; };
+function bookPick(){ bookPicker.click(); }
+
+function isBookFile(f){ return /\.(txt|epub)$/i.test(f.name); }
+
+async function uploadBooks(fileList){
+  const all = [...fileList];
+  const picked = all.filter(isBookFile);
+  if(!picked.length){ toast('只支持 TXT 和 EPUB'); return; }
+  if(uploading){ toast('还有文件正在上传，请稍候'); return; }
+
+  uploading = true;
+  const totalBytes = picked.reduce((sum, f) => sum + f.size, 0) || 1;
+  let sentBytes = 0, saved = 0, failed = 0, lastError = '';
+
+  showUploadProgress(`上传 ${picked.length} 本`, 0);
+
+  // 小说文件通常几 MB 但解析很慢，一本一本传，进度才有意义
+  for(const file of picked){
+    try{
+      const res = await sendBooks([file], loaded => {
+        showUploadProgress(`正在解析《${file.name}》`, (sentBytes + loaded) / totalBytes);
+      });
+      if(res && res.ok){ saved += res.saved; if(res.error) lastError = res.error; }
+      else { failed++; lastError = (res && res.error) || ''; }
+    }catch(err){ failed++; }
+    sentBytes += file.size;
+    showUploadProgress(`已导入 ${saved} / ${picked.length}`, sentBytes / totalBytes);
+  }
+
+  uploading = false;
+  hideUploadProgress();
+
+  const skipped = all.length - picked.length;
+  const notes = [];
+  if(skipped) notes.push(`${skipped} 个格式不支持`);
+  if(failed) notes.push(`${failed} 本失败${lastError ? '（' + lastError + '）' : ''}`);
+  toast(`已导入 ${saved} 本${notes.length ? '，' + notes.join('、') : ''}`);
+
+  await loadBooks();
+  render();
+}
+
+function sendBooks(files, onProgress){
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    files.forEach(f => form.append('files', f, f.name));
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/book/upload');
+    xhr.upload.onprogress = e => { if(e.lengthComputable) onProgress(e.loaded); };
+    xhr.onload = () => {
+      try{ resolve(JSON.parse(xhr.responseText)); }
+      catch(err){ reject(err); }
+    };
+    xhr.onerror = () => reject(new Error('network'));
+    xhr.send(form);
+  });
+}
+
 /* ---------- 选择文件 ---------- */
 const picker = document.createElement('input');
 picker.type = 'file';
@@ -499,6 +640,11 @@ let dragDepth = 0;
 
 function dragMaskText(){
   const title = $('#dragTitle'), hint = $('#dragHint');
+  if(view.section === 'books'){
+    title.textContent = '松开即可导入小说';
+    hint.textContent = '支持 TXT 和 EPUB，一次可以拖多本';
+    return;
+  }
   if(view.level === 'photos'){
     title.textContent = `松开上传到「${folderCache ? folderCache.name : '当前目录'}」`;
     hint.textContent = '支持一次拖入多张图片，也可以直接拖整个文件夹';
@@ -515,7 +661,7 @@ function showDragMask(){
   dragMaskText();
   const mask = $('#dragmask');
   // 目录页要能看清卡片往上拖，所以只给顶部提示，不盖全屏
-  mask.classList.toggle('hintmode', view.level === 'folders');
+  mask.classList.toggle('hintmode', view.section === 'photos' && view.level === 'folders');
   mask.classList.add('on');
 }
 function hideDragMask(){ dragDepth = 0; $('#dragmask').classList.remove('on'); }
@@ -538,11 +684,13 @@ window.addEventListener('drop', async e => {
   if(!hasFiles(e)) return;
   e.preventDefault();
   hideDragMask();
+  const files = await collectFiles(e.dataTransfer);
+  if(view.section === 'books'){ uploadBooks(files); return; }
   if(view.level !== 'photos'){
     toast(view.level === 'folders' ? '请拖到某个目录卡片上' : '请先进入一个目录');
     return;
   }
-  upload(await collectFiles(e.dataTransfer));
+  upload(files);
 });
 
 // 目录卡片作为投放目标
@@ -557,7 +705,7 @@ function cardDragLeave(e, el){
   el.classList.remove('dropping');
 }
 async function cardDrop(e, el, folderId){
-  if(!hasFiles(e)) return;
+  if(!hasFiles(e) || view.section !== 'photos') return;
   e.preventDefault(); e.stopPropagation();
   el.classList.remove('dropping');
   hideDragMask();
@@ -703,7 +851,7 @@ function refreshAfterUpload(folderId){
 }
 
 load();
-setInterval(() => { if(view.level === 'groups' && !uploading) load(); }, 10000);
+setInterval(() => { if(view.section === 'photos' && view.level === 'groups' && !uploading) load(); }, 10000);
 </script>
 </body>
 </html>
