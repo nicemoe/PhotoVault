@@ -101,7 +101,14 @@ struct ReaderView: View {
                     // 两个分支在 SwiftUI 里是不同的视图类型，切换必然重建。
                     switch settings.pageAnimation {
                     case .curl:
-                        pageContainer(source: source, animation: .curl, inset: inset)
+                        // 自己画的仿真翻页：从右上/右下角起翻，跟手
+                        SimulatedFlipReader(source: source,
+                                            margin: inset,
+                                            background: UIColor(theme.background),
+                                            chromeVisible: showChrome,
+                                            revision: styleRevision,
+                                            locator: $locator,
+                                            onToggleChrome: toggleChrome)
                     case .slide:
                         pageContainer(source: source, animation: .slide, inset: inset)
                     }
