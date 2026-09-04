@@ -228,4 +228,23 @@ struct ReaderSettings: Codable, Hashable {
 
     static let fontSizeRange: ClosedRange<Double> = 13...30
     static let lineSpacingRange: ClosedRange<Double> = 2...20
+
+    init() {}
+
+    /// 必须手写解码，全部用 decodeIfPresent 兜默认值。
+    ///
+    /// Swift 合成的 Decodable 不会拿属性默认值当缺失时的兜底——键不在就直接抛错。
+    /// 那样每加一个新设置字段，旧的 books.json 都会解码失败，
+    /// 连带整个 BookIndex 解不出来，用户的书架会被清空。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 19
+        lineSpacing = try c.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? 9
+        margin = try c.decodeIfPresent(Double.self, forKey: .margin) ?? 22
+        font = try c.decodeIfPresent(ReaderFont.self, forKey: .font) ?? .system
+        theme = try c.decodeIfPresent(ReaderTheme.self, forKey: .theme) ?? .paper
+        mode = try c.decodeIfPresent(ReadingMode.self, forKey: .mode) ?? .paged
+        pageAnimation = try c.decodeIfPresent(PageAnimation.self, forKey: .pageAnimation) ?? .curl
+        firstLineIndent = try c.decodeIfPresent(Bool.self, forKey: .firstLineIndent) ?? true
+    }
 }

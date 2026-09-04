@@ -174,6 +174,8 @@ struct PageCurlReader: UIViewControllerRepresentable {
     let background: UIColor
     /// 工具栏是否正显示着。显示时任何位置的点击都只收起它，不翻页。
     let chromeVisible: Bool
+    /// 排版版本号。变了就说明字号/主题/行距改过，当前页要重建。
+    let revision: Int
     @Binding var locator: PageLocator
     var onToggleChrome: () -> Void
 
@@ -190,27 +192,35 @@ struct PageCurlReader: UIViewControllerRepresentable {
         controller.isDoubleSided = false
         controller.view.backgroundColor = background
 
-        // 关掉它自带的点击翻页，只留拖拽。
-        // 否则点击会和我们自己的左右三分之一逻辑打架，出现翻两页。
-        for recognizer in controller.gestureRecognizers where recognizer is UITapGestureRecognizer {
-            recognizer.isEnabled = false
-        }
-
         if let first = context.coordinator.makePage(locator) {
             controller.setViewControllers([first], direction: .forward, animated: false)
         }
+        context.coordinator.disableBuiltInTaps(on: controller)
+        context.coordinator.appliedRevision = revision
         return controller
     }
 
     func updateUIViewController(_ controller: UIPageViewController, context: Context) {
         context.coordinator.parent = self
         controller.view.backgroundColor = background
+        // view 加载之后才有手势，所以放在这里而不是 make 里
+        context.coordinator.disableBuiltInTaps(on: controller)
 
-        // 只有当外部把位置改到了别处（目录跳转、搜索跳转、重排）才需要重设，
-        // 否则会和用户正在进行的手势打架
         let current = (controller.viewControllers?.first as? ReaderPageController)?.locator
-        guard current != locator else { return }
-        guard let page = context.coordinator.makePage(locator) else { return }
+
+        // 排版变了：当前页的背景色和属性串是创建时烘焙的，必须重建，
+        // 否则改主题/字号后要等翻页才生效
+        if context.coordinator.appliedRevision != revision {
+            context.coordinator.appliedRevision = revision
+            if let page = context.coordinator.makePage(locator) {
+                controller.setViewControllers([page], direction: .forward, animated: false)
+            }
+            return
+        }
+
+        // 只有当外部把位置改到了别处（目录跳转、搜索跳转）才需要重设，
+        // 否则会和用户正在进行的手势打架
+        guard current != locator, let page = context.coordinator.makePage(locator) else { return }
 
         let forward = current.map { locator.chapter > $0.chapter
             || (locator.chapter == $0.chapter && locator.page > $0.page) } ?? true
@@ -223,8 +233,21 @@ struct PageCurlReader: UIViewControllerRepresentable {
         var parent: PageCurlReader
         /// 点击翻页时要用它来播动画，数据源回调里顺手记下来
         weak var container: UIPageViewController?
+        var appliedRevision = -1
+        private var tapsDisabled = false
 
         init(_ parent: PageCurlReader) { self.parent = parent }
+
+        /// 关掉 UIPageViewController 自带的点击翻页，只留拖拽。
+        /// 否则它和我们自己的左右三分之一逻辑会同时触发，一次点击翻两页。
+        /// 注意手势要等 view 加载后才存在，makeUIViewController 里拿到的是空数组。
+        func disableBuiltInTaps(on controller: UIPageViewController) {
+            guard !tapsDisabled, controller.isViewLoaded else { return }
+            let taps = controller.gestureRecognizers.filter { $0 is UITapGestureRecognizer }
+            guard !taps.isEmpty else { return }
+            taps.forEach { $0.isEnabled = false }
+            tapsDisabled = true
+        }
 
         func makePage(_ locator: PageLocator) -> ReaderPageController? {
             guard let attributed = parent.source.attributed(at: locator) else { return nil }

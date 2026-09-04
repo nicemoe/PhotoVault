@@ -10,6 +10,10 @@ struct ReaderView: View {
     /// 翻页模式的当前位置。分页交给 PageSource，这里只记「第几章第几页」。
     @State private var locator = PageLocator(chapter: 0, page: 0)
     @State private var pageSource: PageSource?
+    /// 排版版本号。设置一变就 +1，靠它驱动翻页容器刷新当前页——
+    /// 当前页是个已经创建好的控制器，背景色和属性串都是创建时烘焙的，
+    /// 不主动重建的话要等翻页才会变。
+    @State private var styleRevision = 0
 
     /// 滚动模式用
     @State private var chapterText = ""
@@ -91,16 +95,16 @@ struct ReaderView: View {
                     .padding(.horizontal, inset)
 
                 if let source = pageSource {
-                    PageCurlReader(source: source,
-                                   animation: settings.pageAnimation,
-                                   margin: inset,
-                                   background: UIColor(theme.background),
-                                   chromeVisible: showChrome,
-                                   locator: $locator,
-                                   onToggleChrome: toggleChrome)
-                        // transitionStyle 在 UIPageViewController 初始化之后改不了，
-                        // 换翻页效果时必须让 SwiftUI 整个重建
-                        .id(settings.pageAnimation)
+                    // transitionStyle 在 UIPageViewController 初始化之后就改不了了，
+                    // 换翻页效果必须让 SwiftUI 把容器整个拆掉重建。
+                    // 光靠 .id() 不够可靠（实测要切好几次才生效），改用 switch：
+                    // 两个分支在 SwiftUI 里是不同的视图类型，切换必然重建。
+                    switch settings.pageAnimation {
+                    case .curl:
+                        pageContainer(source: source, animation: .curl, inset: inset)
+                    case .slide:
+                        pageContainer(source: source, animation: .slide, inset: inset)
+                    }
                 } else {
                     Spacer()
                 }
@@ -109,6 +113,17 @@ struct ReaderView: View {
             .onChange(of: contentSize) { _, size in rebuildSource(book: book, contentSize: size) }
             .onChange(of: settings) { _, _ in rebuildSource(book: book, contentSize: contentSize) }
         }
+    }
+
+    private func pageContainer(source: PageSource, animation: PageAnimation, inset: CGFloat) -> some View {
+        PageCurlReader(source: source,
+                       animation: animation,
+                       margin: inset,
+                       background: UIColor(theme.background),
+                       chromeVisible: showChrome,
+                       revision: styleRevision,
+                       locator: $locator,
+                       onToggleChrome: toggleChrome)
     }
 
     private var scrollContent: some View {
@@ -294,6 +309,7 @@ struct ReaderView: View {
                                     pageSize: contentSize)
         }
         locator = pageSource?.locator(chapter: locator.chapter, offset: offset) ?? locator
+        styleRevision &+= 1
     }
 
     private func restoreProgress() {
