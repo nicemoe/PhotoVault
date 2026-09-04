@@ -229,7 +229,7 @@ struct ReaderSettingsSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        label("翻页方式")
+                        label("阅读方式")
                         Picker("", selection: Binding(
                             get: { library.settings.mode },
                             set: { value in adjust { $0.mode = value } }
@@ -239,6 +239,21 @@ struct ReaderSettingsSheet: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                    }
+
+                    if library.settings.mode == .paged {
+                        VStack(alignment: .leading, spacing: 10) {
+                            label("翻页效果")
+                            Picker("", selection: Binding(
+                                get: { library.settings.pageAnimation },
+                                set: { value in adjust { $0.pageAnimation = value } }
+                            )) {
+                                ForEach(PageAnimation.allCases) { item in
+                                    Text(item.title).tag(item)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
                     }
 
                     Toggle("段首缩进两字", isOn: Binding(

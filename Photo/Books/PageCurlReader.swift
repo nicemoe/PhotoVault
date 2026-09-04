@@ -1,0 +1,292 @@
+import SwiftUI
+import UIKit
+
+/// 一页的位置：第几章的第几页
+struct PageLocator: Hashable {
+    var chapter: Int
+    var page: Int
+}
+
+/// 分页数据源。
+///
+/// UIPageViewController 随时会问「上一页/下一页是什么」，而分页是按章算的，
+/// 跨章时得临时把相邻章加载并分页。这里做缓存，避免来回翻页反复读盘重排。
+@MainActor
+final class PageSource {
+
+    let bookID: UUID
+    let chapters: [ChapterMeta]
+    private let library: BookLibrary
+
+    var settings: ReaderSettings
+    var textColor: UIColor
+    /// 正文可用区域（已扣掉页边距）
+    var pageSize: CGSize
+
+    private var textCache: [Int: String] = [:]
+    private var attributedCache: [Int: NSAttributedString] = [:]
+    private var pagesCache: [Int: [NSRange]] = [:]
+
+    init(bookID: UUID, chapters: [ChapterMeta], library: BookLibrary,
+         settings: ReaderSettings, textColor: UIColor, pageSize: CGSize) {
+        self.bookID = bookID
+        self.chapters = chapters
+        self.library = library
+        self.settings = settings
+        self.textColor = textColor
+        self.pageSize = pageSize
+    }
+
+    /// 字号、行距、字体、页面尺寸变了都要整体重排
+    func invalidate(settings: ReaderSettings, textColor: UIColor, pageSize: CGSize) {
+        self.settings = settings
+        self.textColor = textColor
+        self.pageSize = pageSize
+        attributedCache.removeAll()
+        pagesCache.removeAll()
+    }
+
+    func text(_ chapter: Int) -> String {
+        if let hit = textCache[chapter] { return hit }
+        let value = library.chapterText(bookID: bookID, index: chapter)
+        // 只留最近几章，长篇翻久了别把全书堆在内存里
+        if textCache.count > 6 { textCache.removeAll() }
+        textCache[chapter] = value
+        return value
+    }
+
+    func attributed(_ chapter: Int) -> NSAttributedString {
+        if let hit = attributedCache[chapter] { return hit }
+        let value = ReaderTypesetter.attributedText(text(chapter), settings: settings, color: textColor)
+        if attributedCache.count > 6 { attributedCache.removeAll() }
+        attributedCache[chapter] = value
+        return value
+    }
+
+    func pages(_ chapter: Int) -> [NSRange] {
+        if let hit = pagesCache[chapter] { return hit }
+        let value = Paginator.pageRanges(for: attributed(chapter), size: pageSize)
+        if pagesCache.count > 6 { pagesCache.removeAll() }
+        pagesCache[chapter] = value
+        return value
+    }
+
+    func pageCount(_ chapter: Int) -> Int { pages(chapter).count }
+
+    func attributed(at locator: PageLocator) -> NSAttributedString? {
+        let ranges = pages(locator.chapter)
+        guard ranges.indices.contains(locator.page) else { return nil }
+        let full = attributed(locator.chapter)
+        let range = ranges[locator.page]
+        guard range.location + range.length <= full.length else { return full }
+        return full.attributedSubstring(from: range)
+    }
+
+    /// 章内偏移 → 页码
+    func locator(chapter: Int, offset: Int) -> PageLocator {
+        PageLocator(chapter: chapter, page: Paginator.pageIndex(containing: offset, in: pages(chapter)))
+    }
+
+    func characterOffset(of locator: PageLocator) -> Int {
+        let ranges = pages(locator.chapter)
+        guard ranges.indices.contains(locator.page) else { return 0 }
+        return ranges[locator.page].location
+    }
+
+    func next(_ locator: PageLocator) -> PageLocator? {
+        if locator.page + 1 < pageCount(locator.chapter) {
+            return PageLocator(chapter: locator.chapter, page: locator.page + 1)
+        }
+        let nextChapter = locator.chapter + 1
+        guard chapters.indices.contains(nextChapter), pageCount(nextChapter) > 0 else { return nil }
+        return PageLocator(chapter: nextChapter, page: 0)
+    }
+
+    func previous(_ locator: PageLocator) -> PageLocator? {
+        if locator.page > 0 {
+            return PageLocator(chapter: locator.chapter, page: locator.page - 1)
+        }
+        let prevChapter = locator.chapter - 1
+        guard chapters.indices.contains(prevChapter) else { return nil }
+        let count = pageCount(prevChapter)
+        guard count > 0 else { return nil }
+        return PageLocator(chapter: prevChapter, page: count - 1)
+    }
+}
+
+// MARK: - 单页控制器
+
+final class ReaderPageController: UIViewController {
+
+    let locator: PageLocator
+    private let attributed: NSAttributedString?
+    private let margin: CGFloat
+    private let background: UIColor
+    /// 0 = 左侧，1 = 中间，2 = 右侧
+    var onTap: ((Int) -> Void)?
+
+    private let pageView = CoreTextPageView()
+
+    init(locator: PageLocator, attributed: NSAttributedString?, margin: CGFloat, background: UIColor) {
+        self.locator = locator
+        self.attributed = attributed
+        self.margin = margin
+        self.background = background
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // pageCurl 要求页面不透明，否则卷起来能看穿到后面
+        view.backgroundColor = background
+        view.isOpaque = true
+
+        pageView.attributed = attributed
+        pageView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pageView)
+        NSLayoutConstraint.activate([
+            pageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: margin),
+            pageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -margin),
+            pageView.topAnchor.constraint(equalTo: view.topAnchor),
+            pageView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        view.addGestureRecognizer(tap)
+    }
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        let x = gesture.location(in: view).x
+        let third = view.bounds.width / 3
+        onTap?(x < third ? 0 : (x > third * 2 ? 2 : 1))
+    }
+}
+
+// MARK: - 翻页容器
+
+struct PageCurlReader: UIViewControllerRepresentable {
+
+    let source: PageSource
+    let animation: PageAnimation
+    let margin: CGFloat
+    let background: UIColor
+    /// 工具栏是否正显示着。显示时任何位置的点击都只收起它，不翻页。
+    let chromeVisible: Bool
+    @Binding var locator: PageLocator
+    var onToggleChrome: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let controller = UIPageViewController(
+            transitionStyle: animation.transitionStyle,
+            navigationOrientation: .horizontal,
+            options: animation == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil
+        )
+        controller.dataSource = context.coordinator
+        controller.delegate = context.coordinator
+        controller.isDoubleSided = false
+        controller.view.backgroundColor = background
+
+        // 关掉它自带的点击翻页，只留拖拽。
+        // 否则点击会和我们自己的左右三分之一逻辑打架，出现翻两页。
+        for recognizer in controller.gestureRecognizers where recognizer is UITapGestureRecognizer {
+            recognizer.isEnabled = false
+        }
+
+        if let first = context.coordinator.makePage(locator) {
+            controller.setViewControllers([first], direction: .forward, animated: false)
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIPageViewController, context: Context) {
+        context.coordinator.parent = self
+        controller.view.backgroundColor = background
+
+        // 只有当外部把位置改到了别处（目录跳转、搜索跳转、重排）才需要重设，
+        // 否则会和用户正在进行的手势打架
+        let current = (controller.viewControllers?.first as? ReaderPageController)?.locator
+        guard current != locator else { return }
+        guard let page = context.coordinator.makePage(locator) else { return }
+
+        let forward = current.map { locator.chapter > $0.chapter
+            || (locator.chapter == $0.chapter && locator.page > $0.page) } ?? true
+        controller.setViewControllers([page], direction: forward ? .forward : .reverse, animated: false)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+
+        var parent: PageCurlReader
+        /// 点击翻页时要用它来播动画，数据源回调里顺手记下来
+        weak var container: UIPageViewController?
+
+        init(_ parent: PageCurlReader) { self.parent = parent }
+
+        func makePage(_ locator: PageLocator) -> ReaderPageController? {
+            guard let attributed = parent.source.attributed(at: locator) else { return nil }
+            let controller = ReaderPageController(locator: locator,
+                                                  attributed: attributed,
+                                                  margin: parent.margin,
+                                                  background: parent.background)
+            controller.onTap = { [weak self] zone in
+                guard let self else { return }
+                // 工具栏亮着的时候，点哪儿都只是把它收起来
+                if self.parent.chromeVisible {
+                    self.parent.onToggleChrome()
+                    return
+                }
+                switch zone {
+                case 0: self.turn(from: locator, forward: false)
+                case 2: self.turn(from: locator, forward: true)
+                default: self.parent.onToggleChrome()
+                }
+            }
+            return controller
+        }
+
+        private func turn(from locator: PageLocator, forward: Bool) {
+            guard let target = forward ? parent.source.next(locator) : parent.source.previous(locator),
+                  let page = makePage(target) else { return }
+
+            guard let container else {
+                parent.locator = target
+                return
+            }
+            container.setViewControllers([page],
+                                         direction: forward ? .forward : .reverse,
+                                         animated: true) { [weak self] finished in
+                if finished { self?.parent.locator = target }
+            }
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController,
+                                viewControllerBefore viewController: UIViewController) -> UIViewController? {
+            container = pageViewController
+            guard let current = viewController as? ReaderPageController,
+                  let target = parent.source.previous(current.locator) else { return nil }
+            return makePage(target)
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController,
+                                viewControllerAfter viewController: UIViewController) -> UIViewController? {
+            container = pageViewController
+            guard let current = viewController as? ReaderPageController,
+                  let target = parent.source.next(current.locator) else { return nil }
+            return makePage(target)
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController,
+                                didFinishAnimating finished: Bool,
+                                previousViewControllers: [UIViewController],
+                                transitionCompleted completed: Bool) {
+            container = pageViewController
+            guard completed,
+                  let current = pageViewController.viewControllers?.first as? ReaderPageController else { return }
+            parent.locator = current.locator
+        }
+    }
+}

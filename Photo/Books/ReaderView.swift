@@ -7,23 +7,25 @@ struct ReaderView: View {
     @Environment(BookLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss
 
-    @State private var chapterIndex = 0
+    /// 翻页模式的当前位置。分页交给 PageSource，这里只记「第几章第几页」。
+    @State private var locator = PageLocator(chapter: 0, page: 0)
+    @State private var pageSource: PageSource?
+
+    /// 滚动模式用
     @State private var chapterText = ""
-    @State private var pageRanges: [NSRange] = []
-    @State private var pageIndex = 0
-    @State private var canvasSize: CGSize = .zero
+    @State private var scrollOffset: Double = 0
+
     @State private var showChrome = false
     @State private var showChapters = false
     @State private var showSettings = false
-    /// 滚动模式下的当前位置，用来存进度
-    @State private var scrollOffsetRatio: Double = 0
-    /// 翻页方向，决定过渡动画从哪边进
-    @State private var turningForward = true
     @State private var showSearch = false
 
     private var book: Book? { library.book(bookID) }
     private var settings: ReaderSettings { library.settings }
     private var theme: ReaderTheme { settings.theme }
+
+    /// 顶部信息条高度，正文可用区域要扣掉它
+    private let headerHeight: CGFloat = 26
 
     var body: some View {
         ZStack {
@@ -43,25 +45,24 @@ struct ReaderView: View {
         .toolbar(.hidden, for: .tabBar)
         .navigationBarHidden(true)
         .task(id: bookID) { restoreProgress() }
-        // 字号、行距、字体、模式变了都要重排
-        .onChange(of: settings) { _, _ in repaginate(keepingOffset: currentOffset()) }
-        .onChange(of: canvasSize) { _, _ in repaginate(keepingOffset: currentOffset()) }
+        .onChange(of: locator) { _, _ in saveProgress() }
+        .onChange(of: settings.mode) { _, _ in syncScrollText() }
         .onDisappear { saveProgress() }
         .sheet(isPresented: $showChapters) {
             if let book {
-                ChapterListSheet(book: book, current: chapterIndex) { index in
-                    load(chapter: index, offset: 0)
+                ChapterListSheet(book: book, current: locator.chapter) { index in
+                    jump(chapter: index, offset: 0)
                 }
             }
         }
         .sheet(isPresented: $showSettings) {
             ReaderSettingsSheet()
-                .presentationDetents([.height(340)])
+                .presentationDetents([.height(400)])
         }
         .sheet(isPresented: $showSearch) {
             if let book {
                 BookSearchSheet(book: book) { hit in
-                    load(chapter: hit.chapterIndex, offset: hit.offset)
+                    jump(chapter: hit.chapterIndex, offset: hit.offset)
                 }
             }
         }
@@ -72,51 +73,41 @@ struct ReaderView: View {
     @ViewBuilder
     private func content(_ book: Book) -> some View {
         switch settings.mode {
-        case .paged:  pagedContent
+        case .paged:  pagedContent(book)
         case .scroll: scrollContent
         }
     }
 
-    private var pagedContent: some View {
+    private func pagedContent(_ book: Book) -> some View {
         GeometryReader { geo in
             let inset = settings.margin
-            let size = CGSize(width: max(1, geo.size.width - inset * 2),
-                              height: max(1, geo.size.height - inset * 2 - headerHeight))
+            // 交给 PageSource 的是「正文可用区域」，页边距由每页控制器自己加
+            let contentSize = CGSize(width: max(1, geo.size.width - inset * 2),
+                                     height: max(1, geo.size.height - headerHeight))
 
-            ZStack(alignment: .top) {
-                if let attributed = pageAttributed() {
-                    CoreTextPage(attributed: attributed)
-                        .frame(width: size.width, height: size.height)
-                        .position(x: geo.size.width / 2, y: inset + headerHeight + size.height / 2)
-                        // 翻页动画：整页横向滑入 + 淡入，方向跟着翻页方向走
-                        .id(pageKey)
-                        .transition(pageTransition)
-                }
-
+            VStack(spacing: 0) {
+                // 信息条留在翻页容器外面，翻页时它不跟着卷，和纸书的书眉一样
                 header
                     .padding(.horizontal, inset)
-                    .padding(.top, 4)
+
+                if let source = pageSource {
+                    PageCurlReader(source: source,
+                                   animation: settings.pageAnimation,
+                                   margin: inset,
+                                   background: UIColor(theme.background),
+                                   chromeVisible: showChrome,
+                                   locator: $locator,
+                                   onToggleChrome: toggleChrome)
+                        // transitionStyle 在 UIPageViewController 初始化之后改不了，
+                        // 换翻页效果时必须让 SwiftUI 整个重建
+                        .id(settings.pageAnimation)
+                } else {
+                    Spacer()
+                }
             }
-            .clipped()
-            .animation(.easeInOut(duration: 0.24), value: pageKey)
-            .contentShape(Rectangle())
-            // 左三分之一上一页，右三分之一下一页，中间调出工具栏
-            .onTapGesture { location in
-                let third = geo.size.width / 3
-                if location.x < third { turn(-1) }
-                else if location.x > third * 2 { turn(1) }
-                else { withAnimation(.easeOut(duration: 0.18)) { showChrome.toggle() } }
-            }
-            // 也支持横向滑动翻页
-            .gesture(
-                DragGesture(minimumDistance: 30)
-                    .onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        turn(value.translation.width < 0 ? 1 : -1)
-                    }
-            )
-            .onAppear { canvasSize = size }
-            .onChange(of: size) { _, new in canvasSize = new }
+            .onAppear { rebuildSource(book: book, contentSize: contentSize) }
+            .onChange(of: contentSize) { _, size in rebuildSource(book: book, contentSize: size) }
+            .onChange(of: settings) { _, _ in rebuildSource(book: book, contentSize: contentSize) }
         }
     }
 
@@ -128,7 +119,7 @@ struct ReaderView: View {
                         Text(currentChapterTitle)
                             .font(.system(size: settings.fontSize + 3, weight: .bold))
                             .foregroundStyle(theme.text)
-                            .padding(.top, 52)
+                            .padding(.top, 40)
                             .id("top")
 
                         Text(chapterText)
@@ -139,7 +130,7 @@ struct ReaderView: View {
 
                         chapterNavigation
                             .padding(.top, 30)
-                            .padding(.bottom, 60)
+                            .padding(.bottom, 40)
                     }
                     .padding(.horizontal, settings.margin)
                     .background(
@@ -150,22 +141,21 @@ struct ReaderView: View {
                     )
                 }
                 .coordinateSpace(name: "reader")
-                .onPreferenceChange(ScrollOffsetKey.self) { offset in
-                    let total = max(1, Double(chapterText.count))
-                    _ = total
-                    scrollOffsetRatio = max(0, Double(offset))
+                .onPreferenceChange(ScrollOffsetKey.self) { value in
+                    scrollOffset = max(0, Double(value))
                 }
-                .onChange(of: chapterIndex) { _, _ in
+                .onChange(of: locator.chapter) { _, _ in
+                    syncScrollText()
                     proxy.scrollTo("top", anchor: .top)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { location in
-                    // 滚动模式下只有中间区域切工具栏，左右留给滚动手势
+                    // 工具栏亮着时，点哪儿都只是收起它
+                    if showChrome { toggleChrome(); return }
                     let third = geo.size.width / 3
-                    if location.x > third && location.x < third * 2 {
-                        withAnimation(.easeOut(duration: 0.18)) { showChrome.toggle() }
-                    }
+                    if location.x > third && location.x < third * 2 { toggleChrome() }
                 }
+                .onAppear { syncScrollText() }
             }
         }
     }
@@ -173,7 +163,7 @@ struct ReaderView: View {
     private var chapterNavigation: some View {
         HStack(spacing: 12) {
             Button {
-                load(chapter: chapterIndex - 1, offset: 0)
+                jump(chapter: locator.chapter - 1, offset: 0)
             } label: {
                 Label("上一章", systemImage: "chevron.left")
                     .font(.system(size: 14, weight: .semibold))
@@ -181,11 +171,11 @@ struct ReaderView: View {
                     .frame(height: 42)
                     .background(theme.text.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .disabled(chapterIndex <= 0)
-            .opacity(chapterIndex <= 0 ? 0.35 : 1)
+            .disabled(locator.chapter <= 0)
+            .opacity(locator.chapter <= 0 ? 0.35 : 1)
 
             Button {
-                load(chapter: chapterIndex + 1, offset: 0)
+                jump(chapter: locator.chapter + 1, offset: 0)
             } label: {
                 Label("下一章", systemImage: "chevron.right")
                     .font(.system(size: 14, weight: .semibold))
@@ -193,38 +183,28 @@ struct ReaderView: View {
                     .frame(height: 42)
                     .background(theme.text.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .disabled(chapterIndex >= (book?.chapterCount ?? 1) - 1)
-            .opacity(chapterIndex >= (book?.chapterCount ?? 1) - 1 ? 0.35 : 1)
+            .disabled(locator.chapter >= (book?.chapterCount ?? 1) - 1)
+            .opacity(locator.chapter >= (book?.chapterCount ?? 1) - 1 ? 0.35 : 1)
         }
         .foregroundStyle(theme.text)
     }
-
-    /// 顶部信息条占的高度，正文可用区域要扣掉它
-    private let headerHeight: CGFloat = 26
 
     private var header: some View {
         HStack {
             Text(currentChapterTitle)
                 .lineLimit(1)
             Spacer()
-            if !pageRanges.isEmpty {
-                Text("\(pageIndex + 1)/\(pageRanges.count)")
-                    .monospacedDigit()
+            if let source = pageSource {
+                let total = source.pageCount(locator.chapter)
+                if total > 0 {
+                    Text("\(locator.page + 1)/\(total)")
+                        .monospacedDigit()
+                }
             }
         }
         .font(.system(size: 11))
         .foregroundStyle(theme.secondary)
-        .frame(height: headerHeight, alignment: .top)
-    }
-
-    /// 翻页动画用：章节 + 页码唯一确定一页，值一变 SwiftUI 就做过渡
-    private var pageKey: String { "\(chapterIndex)-\(pageIndex)" }
-
-    private var pageTransition: AnyTransition {
-        .asymmetric(
-            insertion: .move(edge: turningForward ? .trailing : .leading).combined(with: .opacity),
-            removal: .move(edge: turningForward ? .leading : .trailing).combined(with: .opacity)
-        )
+        .frame(height: headerHeight)
     }
 
     // MARK: 工具栏
@@ -256,11 +236,8 @@ struct ReaderView: View {
             HStack(spacing: 0) {
                 toolButton("目录", "list.bullet") { showChapters = true }
                 toolButton("搜索", "magnifyingglass") { showSearch = true }
-                toolButton(settings.mode.title, settings.mode.icon) {
-                    var s = library.settings
-                    s.mode = s.mode == .paged ? .scroll : .paged
-                    library.settings = s
-                }
+                // 翻页/滚动的切换放在「设置」里就够了。摆在工具栏上显示的是
+                // 当前模式名，看着像个动作，容易读成「点它会翻页」。
                 toolButton(theme.isDark ? "日间" : "夜间", theme.isDark ? "sun.max" : "moon") {
                     var s = library.settings
                     s.theme = s.theme == .night ? .paper : .night
@@ -287,87 +264,69 @@ struct ReaderView: View {
         }
     }
 
+    private func toggleChrome() {
+        withAnimation(.easeOut(duration: 0.18)) { showChrome.toggle() }
+    }
+
     // MARK: 数据
 
     private var currentChapterTitle: String {
-        guard let book, book.chapters.indices.contains(chapterIndex) else { return "" }
-        return book.chapters[chapterIndex].title
+        guard let book, book.chapters.indices.contains(locator.chapter) else { return "" }
+        return book.chapters[locator.chapter].title
     }
 
-    private func pageAttributed() -> NSAttributedString? {
-        guard !chapterText.isEmpty, pageRanges.indices.contains(pageIndex) else { return nil }
-        let full = ReaderTypesetter.attributedText(chapterText,
-                                                   settings: settings,
-                                                   color: UIColor(theme.text))
-        let range = pageRanges[pageIndex]
-        guard range.location + range.length <= full.length else { return full }
-        return full.attributedSubstring(from: range)
+    /// 建立/重建分页数据源。字号、行距、字体、页面尺寸变了都要重来，
+    /// 重来之后按字符偏移把位置找回去，而不是保留页码。
+    private func rebuildSource(book: Book, contentSize: CGSize) {
+        guard contentSize.width > 1, contentSize.height > 1 else { return }
+
+        let offset = pageSource?.characterOffset(of: locator) ?? book.progress.characterOffset
+        let color = UIColor(theme.text)
+
+        if let existing = pageSource {
+            existing.invalidate(settings: settings, textColor: color, pageSize: contentSize)
+        } else {
+            pageSource = PageSource(bookID: bookID,
+                                    chapters: book.chapters,
+                                    library: library,
+                                    settings: settings,
+                                    textColor: color,
+                                    pageSize: contentSize)
+        }
+        locator = pageSource?.locator(chapter: locator.chapter, offset: offset) ?? locator
     }
 
     private func restoreProgress() {
         guard let book else { return }
-        load(chapter: book.progress.chapterIndex, offset: book.progress.characterOffset)
+        locator = PageLocator(chapter: book.progress.chapterIndex, page: 0)
+        syncScrollText()
     }
 
-    private func load(chapter index: Int, offset: Int) {
-        guard let book, book.chapters.indices.contains(index) else { return }
-        if index != chapterIndex { turningForward = index > chapterIndex }
-        chapterIndex = index
-        // 章节标题也放进正文顶部，翻页模式下才不会每章开头突兀
-        chapterText = library.chapterText(bookID: bookID, index: index)
-        repaginate(keepingOffset: offset)
+    /// 跳章：目录、搜索、上下一章都走这里
+    private func jump(chapter: Int, offset: Int) {
+        guard let book, book.chapters.indices.contains(chapter) else { return }
+        if let source = pageSource {
+            locator = source.locator(chapter: chapter, offset: offset)
+        } else {
+            locator = PageLocator(chapter: chapter, page: 0)
+        }
+        syncScrollText()
         saveProgress()
     }
 
-    private func repaginate(keepingOffset offset: Int) {
-        guard settings.mode == .paged, canvasSize.width > 1, !chapterText.isEmpty else {
-            pageRanges = []
-            pageIndex = 0
-            return
-        }
-        let attributed = ReaderTypesetter.attributedText(chapterText,
-                                                         settings: settings,
-                                                         color: UIColor(theme.text))
-        pageRanges = Paginator.pageRanges(for: attributed, size: canvasSize)
-        pageIndex = Paginator.pageIndex(containing: offset, in: pageRanges)
-    }
-
-    /// 当前位置对应的章内字符偏移
-    private func currentOffset() -> Int {
-        if settings.mode == .paged {
-            guard pageRanges.indices.contains(pageIndex) else { return 0 }
-            return pageRanges[pageIndex].location
-        }
-        return Int(scrollOffsetRatio)
-    }
-
-    private func turn(_ direction: Int) {
-        guard !pageRanges.isEmpty else { return }
-        turningForward = direction > 0
-        let next = pageIndex + direction
-
-        if next < 0 {
-            // 翻到上一章的最后一页
-            guard chapterIndex > 0 else { return }
-            load(chapter: chapterIndex - 1, offset: Int.max)
-            withAnimation(.none) { pageIndex = max(0, pageRanges.count - 1) }
-            saveProgress()
-            return
-        }
-        if next >= pageRanges.count {
-            guard let book, chapterIndex < book.chapterCount - 1 else { return }
-            load(chapter: chapterIndex + 1, offset: 0)
-            return
-        }
-
-        pageIndex = next
-        saveProgress()
+    private func syncScrollText() {
+        guard settings.mode == .scroll else { return }
+        chapterText = library.chapterText(bookID: bookID, index: locator.chapter)
     }
 
     private func saveProgress() {
-        library.updateProgress(bookID: bookID,
-                               chapterIndex: chapterIndex,
-                               characterOffset: currentOffset())
+        let offset: Int
+        if settings.mode == .paged {
+            offset = pageSource?.characterOffset(of: locator) ?? 0
+        } else {
+            offset = Int(scrollOffset)
+        }
+        library.updateProgress(bookID: bookID, chapterIndex: locator.chapter, characterOffset: offset)
     }
 }
 

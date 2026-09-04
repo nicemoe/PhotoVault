@@ -168,6 +168,31 @@ enum ReadingMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// 翻页效果。
+///
+/// 仿真卷曲交给系统的 UIPageViewController(.pageCurl)——它是硬件加速的，
+/// 而且能跟手拖出卷角，自己用 SwiftUI 画不出这个效果。
+enum PageAnimation: String, Codable, CaseIterable, Identifiable {
+    case curl
+    case slide
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .curl:  return "仿真"
+        case .slide: return "平移"
+        }
+    }
+
+    var transitionStyle: UIPageViewController.TransitionStyle {
+        switch self {
+        case .curl:  return .pageCurl
+        case .slide: return .scroll
+        }
+    }
+}
+
 /// 书架的展示方式
 enum ShelfLayout: String, Codable, CaseIterable, Identifiable {
     case grid
@@ -197,6 +222,7 @@ struct ReaderSettings: Codable, Hashable {
     var font: ReaderFont = .system
     var theme: ReaderTheme = .paper
     var mode: ReadingMode = .paged
+    var pageAnimation: PageAnimation = .curl
     /// 段首缩进两个字
     var firstLineIndent: Bool = true
 
