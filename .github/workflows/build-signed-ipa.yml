@@ -162,8 +162,12 @@ jobs:
         id: export
         run: |
           set -euo pipefail
-          # 用带引号的 heredoc：${{ }} 在 shell 之前就被 Actions 替换掉了，
-          # 加引号只是防止证书名里万一有 $ 被 shell 再展开一次
+          # heredoc 用单引号包起来：Actions 的表达式在 shell 拿到脚本之前
+          # 就已经替换完了，加引号只是防止证书名里万一有 $ 被 shell 再展开一次。
+          #
+          # 注意：脚本里不要出现空的表达式占位符（两个花括号中间什么都没有）。
+          # Actions 的替换发生在 shell 之前，不管它是不是 shell 注释，
+          # 一律当表达式解析，空的会直接让整个工作流文件被判非法。
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

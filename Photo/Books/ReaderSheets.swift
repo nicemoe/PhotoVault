@@ -67,6 +67,89 @@ struct ChapterListSheet: View {
     }
 }
 
+// MARK: - 全文搜索
+
+struct BookSearchSheet: View {
+
+    let book: Book
+    var onPick: (BookLibrary.SearchHit) -> Void
+
+    @Environment(BookLibrary.self) private var library
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var keyword = ""
+    @State private var hits: [BookLibrary.SearchHit] = []
+    @State private var searching = false
+    @State private var searched = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if searching {
+                    VStack(spacing: 12) {
+                        ProgressView().tint(Theme.accent)
+                        Text("正在搜索全书…")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(Theme.secondaryLabel)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if hits.isEmpty {
+                    EmptyState(icon: "text.magnifyingglass",
+                               title: searched ? "没有找到" : "搜索全书",
+                               message: searched ? "换个词试试" : "输入关键词，会在所有章节里查找")
+                } else {
+                    List(hits) { hit in
+                        Button {
+                            onPick(hit)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(hit.chapterTitle)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.accent)
+                                Text(hit.snippet)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Theme.label)
+                                    .lineLimit(3)
+                            }
+                            .tappableArea()
+                        }
+                        .listRowBackground(Theme.surface)
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .background(Theme.background)
+            .searchable(text: $keyword, prompt: "搜索正文")
+            // 边打边搜会把长篇卡死，等用户停手再搜
+            .onSubmit(of: .search) { runSearch() }
+            .onChange(of: keyword) { _, value in
+                if value.isEmpty { hits = []; searched = false }
+            }
+            .navigationTitle(hits.isEmpty ? "全文搜索" : "找到 \(hits.count) 处")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func runSearch() {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        searching = true
+        searched = true
+        Task {
+            let found = await library.search(bookID: book.id, chapters: book.chapters, keyword: key)
+            hits = found
+            searching = false
+        }
+    }
+}
+
 // MARK: - 阅读设置
 
 struct ReaderSettingsSheet: View {

@@ -17,6 +17,9 @@ struct ReaderView: View {
     @State private var showSettings = false
     /// 滚动模式下的当前位置，用来存进度
     @State private var scrollOffsetRatio: Double = 0
+    /// 翻页方向，决定过渡动画从哪边进
+    @State private var turningForward = true
+    @State private var showSearch = false
 
     private var book: Book? { library.book(bookID) }
     private var settings: ReaderSettings { library.settings }
@@ -27,8 +30,9 @@ struct ReaderView: View {
             theme.background.ignoresSafeArea()
 
             if let book {
+                // 不要 ignoresSafeArea：机身是圆角的，正文铺到物理边缘的话
+                // 最后一行和页码会被圆角切掉。只让背景色铺满，文字待在安全区内。
                 content(book)
-                    .ignoresSafeArea(edges: .bottom)
             }
 
             if showChrome, let book {
@@ -54,6 +58,13 @@ struct ReaderView: View {
             ReaderSettingsSheet()
                 .presentationDetents([.height(340)])
         }
+        .sheet(isPresented: $showSearch) {
+            if let book {
+                BookSearchSheet(book: book) { hit in
+                    load(chapter: hit.chapterIndex, offset: hit.offset)
+                }
+            }
+        }
     }
 
     // MARK: 正文
@@ -70,19 +81,24 @@ struct ReaderView: View {
         GeometryReader { geo in
             let inset = settings.margin
             let size = CGSize(width: max(1, geo.size.width - inset * 2),
-                              height: max(1, geo.size.height - inset * 2 - 28))
+                              height: max(1, geo.size.height - inset * 2 - headerHeight))
 
-            ZStack(alignment: .bottom) {
+            ZStack(alignment: .top) {
                 if let attributed = pageAttributed() {
                     CoreTextPage(attributed: attributed)
                         .frame(width: size.width, height: size.height)
-                        .position(x: geo.size.width / 2, y: inset + size.height / 2)
+                        .position(x: geo.size.width / 2, y: inset + headerHeight + size.height / 2)
+                        // 翻页动画：整页横向滑入 + 淡入，方向跟着翻页方向走
+                        .id(pageKey)
+                        .transition(pageTransition)
                 }
 
-                footer
+                header
                     .padding(.horizontal, inset)
-                    .padding(.bottom, 6)
+                    .padding(.top, 4)
             }
+            .clipped()
+            .animation(.easeInOut(duration: 0.24), value: pageKey)
             .contentShape(Rectangle())
             // 左三分之一上一页，右三分之一下一页，中间调出工具栏
             .onTapGesture { location in
@@ -183,17 +199,32 @@ struct ReaderView: View {
         .foregroundStyle(theme.text)
     }
 
-    private var footer: some View {
+    /// 顶部信息条占的高度，正文可用区域要扣掉它
+    private let headerHeight: CGFloat = 26
+
+    private var header: some View {
         HStack {
             Text(currentChapterTitle)
                 .lineLimit(1)
             Spacer()
             if !pageRanges.isEmpty {
                 Text("\(pageIndex + 1)/\(pageRanges.count)")
+                    .monospacedDigit()
             }
         }
         .font(.system(size: 11))
         .foregroundStyle(theme.secondary)
+        .frame(height: headerHeight, alignment: .top)
+    }
+
+    /// 翻页动画用：章节 + 页码唯一确定一页，值一变 SwiftUI 就做过渡
+    private var pageKey: String { "\(chapterIndex)-\(pageIndex)" }
+
+    private var pageTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: turningForward ? .trailing : .leading).combined(with: .opacity),
+            removal: .move(edge: turningForward ? .leading : .trailing).combined(with: .opacity)
+        )
     }
 
     // MARK: 工具栏
@@ -224,6 +255,7 @@ struct ReaderView: View {
 
             HStack(spacing: 0) {
                 toolButton("目录", "list.bullet") { showChapters = true }
+                toolButton("搜索", "magnifyingglass") { showSearch = true }
                 toolButton(settings.mode.title, settings.mode.icon) {
                     var s = library.settings
                     s.mode = s.mode == .paged ? .scroll : .paged
@@ -279,6 +311,7 @@ struct ReaderView: View {
 
     private func load(chapter index: Int, offset: Int) {
         guard let book, book.chapters.indices.contains(index) else { return }
+        if index != chapterIndex { turningForward = index > chapterIndex }
         chapterIndex = index
         // 章节标题也放进正文顶部，翻页模式下才不会每章开头突兀
         chapterText = library.chapterText(bookID: bookID, index: index)
@@ -310,6 +343,7 @@ struct ReaderView: View {
 
     private func turn(_ direction: Int) {
         guard !pageRanges.isEmpty else { return }
+        turningForward = direction > 0
         let next = pageIndex + direction
 
         if next < 0 {

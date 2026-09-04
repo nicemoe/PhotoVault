@@ -191,6 +191,54 @@ final class BookLibrary {
         return try await importBook(from: temp)
     }
 
+    // MARK: 全文搜索
+
+    struct SearchHit: Identifiable, Hashable {
+        var id = UUID()
+        var chapterIndex: Int
+        var chapterTitle: String
+        /// 命中位置在章内的字符偏移，跳转时直接用
+        var offset: Int
+        /// 命中处上下文，关键词用 【】 标出来
+        var snippet: String
+    }
+
+    /// 逐章读文件搜索。整本几百万字，必须在后台跑，而且要能被取消——
+    /// 用户还在打字时上一次搜索就该停下，否则会积压一堆任务。
+    nonisolated func search(bookID: UUID, chapters: [ChapterMeta], keyword: String, limit: Int = 200) async -> [SearchHit] {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard key.count >= 1 else { return [] }
+
+        var hits: [SearchHit] = []
+        for meta in chapters {
+            if Task.isCancelled { return hits }
+
+            let text = chapterText(bookID: bookID, index: meta.index)
+            guard !text.isEmpty else { continue }
+
+            var cursor = text.startIndex
+            while let found = text.range(of: key, options: .caseInsensitive, range: cursor..<text.endIndex) {
+                let offset = text.distance(from: text.startIndex, to: found.lowerBound)
+
+                let lead = text.index(found.lowerBound, offsetBy: -18, limitedBy: text.startIndex) ?? text.startIndex
+                let tail = text.index(found.upperBound, offsetBy: 18, limitedBy: text.endIndex) ?? text.endIndex
+                let snippet = (String(text[lead..<found.lowerBound])
+                               + "【" + String(text[found]) + "】"
+                               + String(text[found.upperBound..<tail]))
+                    .replacingOccurrences(of: "\n", with: " ")
+
+                hits.append(SearchHit(chapterIndex: meta.index,
+                                      chapterTitle: meta.title,
+                                      offset: offset,
+                                      snippet: snippet))
+                if hits.count >= limit { return hits }
+
+                cursor = found.upperBound
+            }
+        }
+        return hits
+    }
+
     // MARK: 修改
 
     func updateProgress(bookID: UUID, chapterIndex: Int, characterOffset: Int) {

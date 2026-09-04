@@ -15,12 +15,22 @@ struct BookshelfView: View {
     @State private var errorMessage: String?
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
+    @State private var keyword = ""
 
     private var layout: CardGridLayout {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
                               gap: Theme.Metric.cardGap,
                               preferredItemWidth: 160)
+    }
+
+    private var visibleBooks: [Book] {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return library.sortedBooks }
+        return library.sortedBooks.filter {
+            $0.title.localizedCaseInsensitiveContains(key)
+                || $0.author.localizedCaseInsensitiveContains(key)
+        }
     }
 
     var body: some View {
@@ -37,9 +47,14 @@ struct BookshelfView: View {
                             showImporter = true
                         }
                         .padding(.top, 40)
+                    } else if visibleBooks.isEmpty {
+                        EmptyState(icon: "magnifyingglass",
+                                   title: "没有匹配的书",
+                                   message: "试试书名或作者的其他关键词")
+                            .padding(.top, 40)
                     } else {
                         LazyVGrid(columns: layout.columns, spacing: 22) {
-                            ForEach(library.sortedBooks) { book in
+                            ForEach(visibleBooks) { book in
                                 Button {
                                     openedBook = book.id
                                 } label: {
@@ -57,6 +72,7 @@ struct BookshelfView: View {
             .background(Theme.background)
             .scrollIndicators(.hidden)
             .readingWidth($screenWidth)
+            .searchable(text: $keyword, prompt: "搜索书名或作者")
             .navigationTitle("书架")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)
