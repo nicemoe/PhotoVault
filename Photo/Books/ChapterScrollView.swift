@@ -2,13 +2,13 @@ import SwiftUI
 import UIKit
 import CoreText
 
-/// 一段连续文字的排版结果。
+/// 一页的行级排版。
 ///
-/// 和翻页模式共用 ReaderTypesetter 产出的属性串，所以两种模式的字距、
-/// 两端对齐、段间距完全一致——「同一个字符」在两边落在同样的视觉位置，
-/// 切换模式才不会跳。
+/// 吃的是 PageSource 已经切好的页范围和同一份属性串，所以滚动模式里的
+/// 每一行，和翻页模式那一页的每一行，逐行一致——不是两套排版，
+/// 是一套排版两种呈现。
 @MainActor
-final class ChapterScrollLayout {
+final class PageLayout {
 
     private(set) var totalHeight: CGFloat = 0
 
@@ -24,10 +24,10 @@ final class ChapterScrollLayout {
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
 
         // 不要用 greatestFiniteMagnitude，CoreText 对它的处理不稳定
-        let constraint = CGSize(width: width, height: 1_000_000)
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
-            framesetter, CFRange(location: 0, length: 0), nil, constraint, nil)
-        let height = ceil(suggested.height) + 4
+            framesetter, CFRange(location: 0, length: 0), nil,
+            CGSize(width: width, height: 1_000_000), nil)
+        let height = ceil(suggested.height) + 2
         totalHeight = height
 
         let path = CGPath(rect: CGRect(x: 0, y: 0, width: width, height: height), transform: nil)
@@ -50,24 +50,16 @@ final class ChapterScrollLayout {
         }
     }
 
-    /// 只画和可见区域相交的行。
-    ///
-    /// 不能整块 CTFrameDraw 到一个和正文一样高的 UIView 上——一章几千行，
-    /// 那个 UIView 的位图能到几百 MB。这里画布只有一屏大，每帧最多几十行。
-    ///
-    /// ctx 已经翻成 y 轴向上，canvasHeight 是画布高度，
-    /// originY 是这段文字顶部在画布里的自上而下坐标。
+    /// ctx 已经翻成 y 轴向上，originY 是这段文字顶部在格子里的自上而下坐标
     func draw(in ctx: CGContext, originY: CGFloat, canvasHeight: CGFloat, x: CGFloat) {
         for (i, line) in lines.enumerated() {
-            let top = originY + lineTops[i]
-            guard top + lineAscents[i] * 1.6 > -20, top < canvasHeight + 20 else { continue }
-            let baseline = top + lineAscents[i]
+            let baseline = originY + lineTops[i] + lineAscents[i]
             ctx.textPosition = CGPoint(x: x + lineLefts[i], y: canvasHeight - baseline)
             CTLineDraw(line, ctx)
         }
     }
 
-    /// 顶部停在 y 时对应的字符位置
+    /// 顶部停在 y 时，对应本页内的第几个字
     func characterOffset(atY y: CGFloat) -> Int {
         guard !lineTops.isEmpty else { return 0 }
         var result = 0
@@ -77,7 +69,7 @@ final class ChapterScrollLayout {
         return result
     }
 
-    /// 某个字符应该滚到哪个 y
+    /// 本页内的某个字应该落在哪个 y
     func y(forCharacterOffset offset: Int) -> CGFloat {
         guard !lineTops.isEmpty else { return 0 }
         for (i, range) in lineRanges.enumerated() where offset < range.location + range.length {
@@ -87,46 +79,66 @@ final class ChapterScrollLayout {
     }
 }
 
-/// 已经排好版、挂在滚动内容里的一章
+/// 列表里的一格 = 翻页模式的一页
 @MainActor
-private final class ChapterBlock {
+private struct PageItem {
+    let chapter: Int
+    let page: Int
+    /// 本页在本章正文里的字符范围
+    let range: NSRange
+    let body: PageLayout
+    /// 本章第一页才画标题
+    let title: PageLayout?
 
-    let index: Int
-    let title: ChapterScrollLayout
-    let body: ChapterScrollLayout
-    /// 本章在滚动内容里的顶部。前面插入章节时会整体平移。
-    var top: CGFloat = 0
+    /// 标题上方留白、标题与正文的间距、页与页之间的间距
+    static let titlePad: CGFloat = 40
+    static let titleGap: CGFloat = 20
+    static let pageGap: CGFloat = 2
 
-    /// 标题上方留白、标题与正文的间距、章与章之间的间距
-    static let titlePad: CGFloat = 46
-    static let titleGap: CGFloat = 22
-    static let chapterGap: CGFloat = 52
-
-    init(index: Int, title: ChapterScrollLayout, body: ChapterScrollLayout) {
-        self.index = index
-        self.title = title
-        self.body = body
+    var bodyTop: CGFloat {
+        guard let title else { return 0 }
+        return Self.titlePad + title.totalHeight + Self.titleGap
     }
 
-    var bodyTop: CGFloat { Self.titlePad + title.totalHeight + Self.titleGap }
-    var height: CGFloat { bodyTop + body.totalHeight + Self.chapterGap }
+    var height: CGFloat { bodyTop + body.totalHeight + Self.pageGap }
 }
 
-/// 画可见部分的画布。只有一屏大，跟着滚动走。
-private final class ScrollCanvas: UIView {
-    var render: ((CGContext, CGRect) -> Void)?
+private final class PageCell: UICollectionViewCell {
+
+    static let reuseID = "page"
+
+    fileprivate var item: PageItem? {
+        didSet { setNeedsDisplay() }
+    }
+    var textX: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        contentMode = .redraw
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        guard let item, let ctx = UIGraphicsGetCurrentContext() else { return }
         ctx.textMatrix = .identity
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
-        render?(ctx, bounds)
+        item.title?.draw(in: ctx, originY: PageItem.titlePad,
+                         canvasHeight: bounds.height, x: textX)
+        item.body.draw(in: ctx, originY: item.bodyTop,
+                       canvasHeight: bounds.height, x: textX)
     }
 }
 
-/// 跨章连续滚动阅读。读到章尾自动接上下一章，不用手动点。
-final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
+/// 跨章连续滚动阅读。
+///
+/// 每一格就是翻页模式的一页，所以格子最高不过一屏——
+/// 交给 UICollectionView 回收就行，不用自己管哪些该画、哪些该丢。
+final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
+                                    UICollectionViewDelegateFlowLayout {
 
     var source: PageSource?
     var chapterTitles: [String] = []
@@ -138,53 +150,65 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
     var onPositionChange: ((Int, Int) -> Void)?
     var onToggleChrome: (() -> Void)?
 
-    private let scrollView = UIScrollView()
-    private let canvas = ScrollCanvas()
-    private var blocks: [ChapterBlock] = []
+    private let collectionView: UICollectionView
+    private var items: [PageItem] = []
+    /// items 里每一格的顶部，前缀和。改动 items 后重算。
+    private var tops: [CGFloat] = []
+
+    /// 想停在哪。宽度还没下来、排不了版的时候也先记着，等能排了再落实。
+    private var desired = (chapter: 0, offset: 0)
     /// 程序改滚动位置时不要把它又当成用户滚动报回去
     private var isRestoring = false
     private var lastWidth: CGFloat = 0
     private var lastReported = (chapter: -1, offset: -1)
-    /// 想停在哪。宽度还没下来、排不了版的时候也先记着，等能排了再落实。
-    private var desired = (chapter: 0, offset: 0)
 
-    /// 最多同时留几章，再多就把离得最远的那头丢掉
-    private let maxBlocks = 6
+    /// 最多留几章，再多就把离得远的那头丢掉
+    private let maxChapters = 4
 
     override init(frame: CGRect) {
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .vertical
+        layout.minimumLineSpacing = 0
+        layout.minimumInteritemSpacing = 0
+        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
-        scrollView.delegate = self
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.alwaysBounceVertical = true
-        scrollView.contentInsetAdjustmentBehavior = .never
-        addSubview(scrollView)
-        scrollView.addSubview(canvas)
 
-        canvas.backgroundColor = .clear
-        canvas.isOpaque = false
-        canvas.render = { [weak self] ctx, rect in self?.draw(in: ctx, canvasRect: rect) }
+        collectionView.backgroundColor = .clear
+        collectionView.showsVerticalScrollIndicator = false
+        collectionView.alwaysBounceVertical = true
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.register(PageCell.self, forCellWithReuseIdentifier: PageCell.reuseID)
+        addSubview(collectionView)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false
-        scrollView.addGestureRecognizer(tap)
+        collectionView.addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        scrollView.frame = bounds
+        collectionView.frame = bounds
         guard bounds.width > 1, abs(bounds.width - lastWidth) > 0.5 else { return }
         lastWidth = bounds.width
-        // 必须照 desired 排。这里不能问 currentPosition()——
-        // 首次布局时 blocks 还是空的，它只会答「第 0 章第 0 字」，
+        // 必须照 desired 排。这里不能问「当前位置」——
+        // 首次布局时一格都还没有，只会答「第 0 章第 0 字」，
         // 把外面要求跳转的位置吃掉。
         reflow()
     }
 
-    // MARK: 排版
+    // MARK: 装载
 
-    private var textWidth: CGFloat { max(1, bounds.width - CGFloat(settings.margin) * 2) }
+    /// 正文宽度直接取分页时用的那个，保证和翻页模式逐行一致
+    private var textWidth: CGFloat {
+        let width = source?.pageSize.width ?? 0
+        return width > 1 ? width : max(1, bounds.width - CGFloat(settings.margin) * 2)
+    }
+
+    private var textX: CGFloat { max(0, (bounds.width - textWidth) / 2) }
 
     /// 标题用同一套排版，只是大一号
     private var titleSettings: ReaderSettings {
@@ -193,15 +217,27 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         return s
     }
 
-    private func makeBlock(_ index: Int) -> ChapterBlock? {
-        guard let source, index >= 0, index < chapterTitles.count else { return nil }
-        let titleText = ReaderTypesetter.attributedText(chapterTitles[index],
-                                                       settings: titleSettings,
-                                                       color: textColor)
-        return ChapterBlock(index: index,
-                            title: ChapterScrollLayout(attributed: titleText, width: textWidth),
-                            body: ChapterScrollLayout(attributed: source.attributed(index),
-                                                      width: textWidth))
+    private func makeItems(chapter: Int) -> [PageItem] {
+        guard let source, chapter >= 0, chapter < chapterTitles.count else { return [] }
+        let full = source.attributed(chapter)
+        let ranges = source.pages(chapter)
+        let width = textWidth
+
+        let title = PageLayout(
+            attributed: ReaderTypesetter.attributedText(chapterTitles[chapter],
+                                                        settings: titleSettings,
+                                                        color: textColor),
+            width: width)
+
+        return ranges.enumerated().compactMap { index, range in
+            guard range.location + range.length <= full.length else { return nil }
+            return PageItem(chapter: chapter,
+                            page: index,
+                            range: range,
+                            body: PageLayout(attributed: full.attributedSubstring(from: range),
+                                             width: width),
+                            title: index == 0 ? title : nil)
+        }
     }
 
     /// 跳到某一章的某个字符。此刻排不了版也没关系，位置先记下。
@@ -210,87 +246,124 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         reflow()
     }
 
-    /// 照 desired 重新排版。宽度、字号、主题变了都走这里，位置不会丢。
+    /// 照 desired 重新装载。宽度、字号、主题变了都走这里，位置不会丢。
     func reflow() {
         guard bounds.width > 1, source != nil, !chapterTitles.isEmpty else { return }
-        blocks = makeBlock(desired.chapter).map { [$0] } ?? []
+        items = makeItems(chapter: desired.chapter)
+        fillForward()
         restack()
+        collectionView.reloadData()
+        collectionView.layoutIfNeeded()
         applyDesired()
-        fillViewport()
     }
 
-    /// 把后面的章节先接上，直到内容够高。
+    /// 往后多装几章，直到内容够高。
     ///
-    /// 不能只靠 scrollViewDidScroll 去接——短章（比如序章）排完还不到一屏，
-    /// UIScrollView 压根滚不动，滚动事件一次都不会来，
-    /// 于是永远接不上下一章，卡在那一章里出不去。
-    private func fillViewport() {
-        var appended = 0
-        while scrollView.contentSize.height < bounds.height * 2.2,
-              let last = blocks.last,
-              last.index + 1 < chapterTitles.count,
-              appended < 20 {
-            guard let next = makeBlock(last.index + 1) else { break }
-            blocks.append(next)
-            restack()
-            appended += 1
+    /// 不能只等 scrollViewDidScroll 去装——序章那种短章排完还不到一屏，
+    /// UICollectionView 压根滚不动，滚动事件一次都不会来，
+    /// 于是永远装不上下一章，卡在那章里出不去。
+    private func fillForward() {
+        var height = items.reduce(0) { $0 + $1.height }
+        var chapter = items.last?.chapter ?? desired.chapter
+        var added = 0
+        while height < bounds.height * 2.2, chapter + 1 < chapterTitles.count, added < 20 {
+            let next = makeItems(chapter: chapter + 1)
+            guard !next.isEmpty else { break }
+            items.append(contentsOf: next)
+            height += next.reduce(0) { $0 + $1.height }
+            chapter += 1
+            added += 1
         }
-        if appended > 0 { canvas.setNeedsDisplay() }
     }
 
-    private func applyDesired() {
-        guard let block = blocks.first(where: { $0.index == desired.chapter }) else { return }
-        isRestoring = true
-        let y = block.top + block.bodyTop + block.body.y(forCharacterOffset: desired.offset)
-        let maxY = max(0, scrollView.contentSize.height - bounds.height)
-        scrollView.setContentOffset(CGPoint(x: 0, y: min(max(0, y), maxY)), animated: false)
-        isRestoring = false
-        positionCanvas()
-        canvas.setNeedsDisplay()
-        report()
-    }
-
-    /// 重新计算每章的 top 和内容高度
     private func restack() {
+        tops = []
+        tops.reserveCapacity(items.count)
         var y: CGFloat = 0
-        for block in blocks {
-            block.top = y
-            y += block.height
+        for item in items {
+            tops.append(y)
+            y += item.height
         }
-        let isLast = blocks.last.map { $0.index == chapterTitles.count - 1 } ?? true
-        // 读到全书结尾时底部留一点，不至于卡在最后一行
-        scrollView.contentSize = CGSize(width: bounds.width,
-                                        height: y + (isLast ? bounds.height * 0.4 : 0))
+    }
+
+    private var contentHeight: CGFloat {
+        guard let last = tops.last, let item = items.last else { return 0 }
+        return last + item.height
     }
 
     // MARK: 位置换算
 
+    private func itemIndex(atY y: CGFloat) -> Int {
+        guard !tops.isEmpty else { return 0 }
+        var result = 0
+        for (i, top) in tops.enumerated() {
+            if top <= y + 1 { result = i } else { break }
+        }
+        return result
+    }
+
     private func currentPosition() -> (chapter: Int, offset: Int) {
-        let y = scrollView.contentOffset.y
-        guard let block = blocks.last(where: { $0.top <= y }) ?? blocks.first else { return (0, 0) }
-        let local = y - block.top - block.bodyTop
-        return (block.index, block.body.characterOffset(atY: max(0, local)))
+        guard !items.isEmpty else { return desired }
+        let y = collectionView.contentOffset.y
+        let index = itemIndex(atY: y)
+        let item = items[index]
+        let local = y - tops[index] - item.bodyTop
+        // 页内偏移 + 本页在章里的起点 = 章内偏移
+        return (item.chapter, item.range.location + item.body.characterOffset(atY: max(0, local)))
+    }
+
+    private func applyDesired() {
+        guard !items.isEmpty else { return }
+        // 找到包含目标字符的那一页
+        let index = items.lastIndex(where: {
+            $0.chapter == desired.chapter && $0.range.location <= desired.offset
+        }) ?? items.firstIndex(where: { $0.chapter == desired.chapter })
+        guard let index else { return }
+
+        let item = items[index]
+        let inPage = max(0, desired.offset - item.range.location)
+        let y = tops[index] + item.bodyTop + item.body.y(forCharacterOffset: inPage)
+
+        isRestoring = true
+        let maxY = max(0, contentHeight - bounds.height)
+        collectionView.setContentOffset(CGPoint(x: 0, y: min(max(0, y), maxY)), animated: false)
+        isRestoring = false
+        report()
+    }
+
+    // MARK: 数据源
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        items.count
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: PageCell.reuseID,
+                                                      for: indexPath)
+        if let cell = cell as? PageCell, items.indices.contains(indexPath.item) {
+            cell.textX = textX
+            cell.item = items[indexPath.item]
+        }
+        return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, layout: UICollectionViewLayout,
+                        sizeForItemAt indexPath: IndexPath) -> CGSize {
+        guard items.indices.contains(indexPath.item) else { return .zero }
+        return CGSize(width: bounds.width, height: items[indexPath.item].height)
     }
 
     // MARK: 滚动
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        positionCanvas()
         guard !isRestoring else { return }
         extendIfNeeded()
         report()
     }
 
-    private func positionCanvas() {
-        let frame = CGRect(x: 0, y: max(0, scrollView.contentOffset.y),
-                           width: bounds.width, height: bounds.height)
-        guard frame != canvas.frame else { return }
-        canvas.frame = frame
-        canvas.setNeedsDisplay()
-    }
-
     private func report() {
-        guard !blocks.isEmpty else { return }
+        guard !items.isEmpty else { return }
         let pos = currentPosition()
         guard pos.chapter != lastReported.chapter || pos.offset != lastReported.offset else { return }
         lastReported = pos
@@ -298,67 +371,64 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         onPositionChange?(pos.chapter, pos.offset)
     }
 
-    /// 快读到章尾就把下一章接上，往回滚就把上一章补上
+    /// 快读到头就把下一章接上，往回滚就把上一章补上
     private func extendIfNeeded() {
-        guard let first = blocks.first, let last = blocks.last else { return }
-        let y = scrollView.contentOffset.y
-        let lookahead = bounds.height * 1.2
+        guard let first = items.first, let last = items.last else { return }
+        let y = collectionView.contentOffset.y
+        let lookahead = bounds.height * 1.5
 
-        if y + bounds.height > scrollView.contentSize.height - lookahead,
-           last.index + 1 < chapterTitles.count,
-           let next = makeBlock(last.index + 1) {
-            blocks.append(next)
-            restack()
-            fillViewport()
-            trimFromTop()
-            canvas.setNeedsDisplay()
+        if y + bounds.height > contentHeight - lookahead, last.chapter + 1 < chapterTitles.count {
+            let next = makeItems(chapter: last.chapter + 1)
+            guard !next.isEmpty else { return }
+            let anchor = currentPosition()
+            items.append(contentsOf: next)
+            // 只往后加的话前面没动，滚动位置不用碰——
+            // 这时候去 setContentOffset 会把正在减速的滚动硬生生刹停
+            let dropped = dropChapter(farthestFrom: anchor.chapter, fromFront: true)
+            commit(restoringTo: dropped ? anchor : nil)
             return
         }
 
-        if y < lookahead, first.index > 0, let prev = makeBlock(first.index - 1) {
-            blocks.insert(prev, at: 0)
-            restack()
-            // 前面插了一章，内容整体往下移了，得把滚动位置补回去，否则画面会跳
-            isRestoring = true
-            scrollView.setContentOffset(CGPoint(x: 0, y: y + prev.height), animated: false)
-            isRestoring = false
-            if blocks.count > maxBlocks {
-                blocks.removeLast()
-                restack()
-            }
-            positionCanvas()
-            canvas.setNeedsDisplay()
+        if y < lookahead, first.chapter > 0 {
+            let prev = makeItems(chapter: first.chapter - 1)
+            guard !prev.isEmpty else { return }
+            let anchor = currentPosition()
+            items.insert(contentsOf: prev, at: 0)
+            _ = dropChapter(farthestFrom: anchor.chapter, fromFront: false)
+            // 前面插了一章，原来看的那格整体往下移了，必须补回去
+            commit(restoringTo: anchor)
         }
     }
 
-    /// 丢掉最前面那一章。
-    /// 只丢已经滚过去一屏以上的——短章的时候 fillViewport 会一次接好几章，
-    /// 不加这个判断会把正在读的那章丢掉。
-    private func trimFromTop() {
-        guard blocks.count > maxBlocks, let first = blocks.first,
-              first.top + first.height < scrollView.contentOffset.y - bounds.height else { return }
-        blocks.removeFirst()
+    /// 章节留太多就丢掉离得最远的那头。返回是否真的丢了。
+    @discardableResult
+    private func dropChapter(farthestFrom current: Int, fromFront: Bool) -> Bool {
+        let chapters = Set(items.map(\.chapter))
+        guard chapters.count > maxChapters else { return false }
+        guard let drop = fromFront ? chapters.min() : chapters.max(),
+              drop != current else { return false }   // 正在读的那章绝不能丢
+        items.removeAll { $0.chapter == drop }
+        return true
+    }
+
+    /// items 改完后落位。anchor 为 nil 表示前面没动，不要去碰滚动位置。
+    private func commit(restoringTo anchor: (chapter: Int, offset: Int)?) {
         restack()
+        collectionView.reloadData()
+        collectionView.layoutIfNeeded()
+
+        guard let anchor,
+              let index = items.lastIndex(where: {
+                  $0.chapter == anchor.chapter && $0.range.location <= anchor.offset
+              }) else { return }
+
+        let item = items[index]
+        let inPage = max(0, anchor.offset - item.range.location)
         isRestoring = true
-        scrollView.setContentOffset(
-            CGPoint(x: 0, y: max(0, scrollView.contentOffset.y - first.height)), animated: false)
+        collectionView.setContentOffset(
+            CGPoint(x: 0, y: max(0, tops[index] + item.bodyTop + item.body.y(forCharacterOffset: inPage))),
+            animated: false)
         isRestoring = false
-        positionCanvas()
-    }
-
-    // MARK: 绘制
-
-    private func draw(in ctx: CGContext, canvasRect: CGRect) {
-        let canvasTop = canvas.frame.minY
-        let x = CGFloat(settings.margin)
-        for block in blocks {
-            let blockTop = block.top - canvasTop
-            guard blockTop < canvasRect.height + 40, blockTop + block.height > -40 else { continue }
-            block.title.draw(in: ctx, originY: blockTop + ChapterBlock.titlePad,
-                             canvasHeight: canvasRect.height, x: x)
-            block.body.draw(in: ctx, originY: blockTop + block.bodyTop,
-                            canvasHeight: canvasRect.height, x: x)
-        }
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -393,21 +463,19 @@ struct ChapterScrollReader: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ChapterScrollContainer {
         let view = ChapterScrollContainer()
-        configure(view, context.coordinator)
+        configure(view)
         context.coordinator.appliedRevision = revision
         context.coordinator.appliedJump = jump
-        context.coordinator.position = (jump.chapter, jump.offset)
         view.rebuild(chapter: jump.chapter, offset: jump.offset)
         return view
     }
 
     func updateUIView(_ view: ChapterScrollContainer, context: Context) {
-        configure(view, context.coordinator)
+        configure(view)
 
         // 目录、搜索、书签、切模式过来的跳转
         if context.coordinator.appliedJump != jump {
             context.coordinator.appliedJump = jump
-            context.coordinator.position = (jump.chapter, jump.offset)
             view.rebuild(chapter: jump.chapter, offset: jump.offset)
             return
         }
@@ -419,17 +487,14 @@ struct ChapterScrollReader: UIViewRepresentable {
         }
     }
 
-    private func configure(_ view: ChapterScrollContainer, _ coordinator: Coordinator) {
+    private func configure(_ view: ChapterScrollContainer) {
         view.source = source
         view.chapterTitles = chapterTitles
         view.settings = settings
         view.textColor = textColor
         view.chromeVisible = chromeVisible
         view.onToggleChrome = onToggleChrome
-        view.onPositionChange = { chapter, offset in
-            coordinator.position = (chapter, offset)
-            onPositionChange(chapter, offset)
-        }
+        view.onPositionChange = onPositionChange
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -437,6 +502,5 @@ struct ChapterScrollReader: UIViewRepresentable {
     final class Coordinator {
         var appliedRevision = -1
         var appliedJump = ScrollJump(chapter: -1, offset: -1, token: -1)
-        var position: (chapter: Int, offset: Int) = (0, 0)
     }
 }
