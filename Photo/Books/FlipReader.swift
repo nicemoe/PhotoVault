@@ -62,7 +62,10 @@ final class FlipContainerView: UIView {
     private var animationFrom: CGPoint = .zero
     private var animationTo: CGPoint = .zero
     private var animationStart: CFTimeInterval = 0
-    private let animationDuration: CFTimeInterval = 0.32
+    private var animationDuration: CFTimeInterval = 0.5
+    /// 走完整段（页角 → 完全翻走）用的时间。实际时长按距离折算，
+    /// 从半路松手时就不该还花满这么久。
+    private let fullFlipDuration: CFTimeInterval = 0.5
     /// 动画结束后要落到的位置
     private var pendingLocator: PageLocator?
 
@@ -203,7 +206,9 @@ final class FlipContainerView: UIView {
     /// 距离取对角线的 2.4 倍，保证整页都落到折线的另一侧、彻底翻走。
     private func foldedAwayPoint() -> CGPoint {
         let corner = flipView.corner
-        let distance = hypot(bounds.width, bounds.height) * 2.4
+        // 2.05 倍对角线刚好够整页翻走。再多的话，多出来那段纸已经看不见了，
+        // 却还在占用动画时间，会让可见部分显得更快。
+        let distance = hypot(bounds.width, bounds.height) * 2.05
         // 约 27° 的斜角，右下角就往左上走，右上角就往左下走
         let dx = -cos(CGFloat.pi * 27 / 180)
         let dy = (corner.y > bounds.midY ? -1 : 1) * sin(CGFloat.pi * 27 / 180)
@@ -254,6 +259,13 @@ final class FlipContainerView: UIView {
         animationStart = CACurrentMediaTime()
         if !commit { pendingLocator = nil }
 
+        // 时长按实际要走的距离折算：从半路松手只补剩下那段，
+        // 否则短距离也花满时间，看着像卡住了
+        let distance = hypot(to.x - from.x, to.y - from.y)
+        let full = hypot(bounds.width, bounds.height) * 2.05
+        let ratio = full > 0 ? min(1, distance / full) : 1
+        animationDuration = max(0.18, fullFlipDuration * ratio)
+
         displayLink?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(step))
         link.add(to: .main, forMode: .common)
@@ -263,8 +275,10 @@ final class FlipContainerView: UIView {
     @objc private func step() {
         let elapsed = CACurrentMediaTime() - animationStart
         let t = min(1, elapsed / animationDuration)
-        // ease-out，末尾慢下来更像纸落下
-        let eased = 1 - pow(1 - t, 3)
+        // ease-in-out：慢起、中间快、慢停。
+        // 不能用 ease-out——它开头最快，cubic 在 30% 的时间里就走完 66% 的路程，
+        // 整个翻页的主体动作全挤在头零点几秒，看起来就是闪一下。
+        let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
 
         let point = CGPoint(x: animationFrom.x + (animationTo.x - animationFrom.x) * eased,
                             y: animationFrom.y + (animationTo.y - animationFrom.y) * eased)
