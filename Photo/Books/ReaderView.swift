@@ -350,8 +350,7 @@ struct ReaderView: View {
         guard text != chapterText || paragraphs.isEmpty else { return }
         chapterText = text
         paragraphs = text
-            .components(separatedBy: "
-")
+            .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .enumerated()
