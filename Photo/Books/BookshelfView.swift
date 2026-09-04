@@ -52,13 +52,25 @@ struct BookshelfView: View {
                                    title: "没有匹配的书",
                                    message: "试试书名或作者的其他关键词")
                             .padding(.top, 40)
-                    } else {
+                    } else if library.shelfLayout == .grid {
                         LazyVGrid(columns: layout.columns, spacing: 22) {
                             ForEach(visibleBooks) { book in
                                 Button {
                                     openedBook = book.id
                                 } label: {
                                     BookCard(book: book, side: layout.side)
+                                }
+                                .buttonStyle(PressableCardStyle())
+                                .contextMenu { menu(for: book) }
+                            }
+                        }
+                    } else {
+                        LazyVStack(spacing: 10) {
+                            ForEach(visibleBooks) { book in
+                                Button {
+                                    openedBook = book.id
+                                } label: {
+                                    BookRow(book: book)
                                 }
                                 .buttonStyle(PressableCardStyle())
                                 .contextMenu { menu(for: book) }
@@ -78,6 +90,8 @@ struct BookshelfView: View {
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 0) {
+                    layoutMenu
                     Menu {
                         Button {
                             showImporter = true
@@ -92,6 +106,7 @@ struct BookshelfView: View {
                         }
                     } label: {
                         Image(systemName: "plus").circleIcon()
+                    }
                     }
                 }
             }
@@ -135,6 +150,24 @@ struct BookshelfView: View {
             }
         }
         .toast($toastItem)
+    }
+
+    /// 用菜单 + 对勾而不是单键切换：两种布局的图标谁代表「当前」谁代表
+    /// 「点了会变成」很容易读反，菜单里打勾没有歧义。和相册页排序菜单同一个模式。
+    private var layoutMenu: some View {
+        Menu {
+            Picker("", selection: Binding(
+                get: { library.shelfLayout },
+                set: { library.shelfLayout = $0 }
+            )) {
+                ForEach(ShelfLayout.allCases) { item in
+                    Label(item.title, systemImage: item.icon).tag(item)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: library.shelfLayout.icon).circleIcon(glyph: 12.5)
+        }
     }
 
     /// epub 系统没有内置 UTType，用文件扩展名兜底
@@ -243,6 +276,59 @@ struct BookCard: View {
             .padding(.top, 9)
         }
         .frame(width: side)
+    }
+}
+
+// MARK: - 书列表行
+
+struct BookRow: View {
+    let book: Book
+
+    private var tint: Color { Theme.color(at: book.colorIndex) }
+
+    var body: some View {
+        HStack(spacing: 13) {
+            // 缩小版书封，保持和卡片模式一致的视觉语言
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tint.opacity(0.18))
+                Text(book.format.label)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 42, height: 56)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.title)
+                    .font(.system(size: 15.5, weight: .semibold))
+                    .foregroundStyle(Theme.label)
+                    .lineLimit(1)
+
+                Text(book.author.isEmpty ? "\(book.chapterCount) 章" : "\(book.author) · \(book.chapterCount) 章")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.secondaryLabel)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    ProgressView(value: book.progressRatio)
+                        .tint(tint)
+                        .scaleEffect(x: 1, y: 0.55, anchor: .center)
+                        .frame(maxWidth: 110)
+                    Text(book.progressText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.tertiaryLabel)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.tertiaryLabel)
+        }
+        .padding(12)
+        .flatCard(radius: 16)
+        .tappableArea()
     }
 }
 

@@ -168,6 +168,28 @@ enum ReadingMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// 书架的展示方式
+enum ShelfLayout: String, Codable, CaseIterable, Identifiable {
+    case grid
+    case list
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .grid: return "卡片"
+        case .list: return "列表"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .grid: return "square.grid.2x2"
+        case .list: return "list.bullet"
+        }
+    }
+}
+
 struct ReaderSettings: Codable, Hashable {
     var fontSize: Double = 19
     var lineSpacing: Double = 9

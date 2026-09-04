@@ -26,6 +26,8 @@ enum BookPaths {
 private struct BookIndex: Codable {
     var books: [Book] = []
     var settings = ReaderSettings()
+    /// 书架布局是书架的偏好，不属于阅读设置，所以单独放一层
+    var shelfLayout: ShelfLayout = .grid
 
     init() {}
 
@@ -33,9 +35,10 @@ private struct BookIndex: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         books = try c.decodeIfPresent([Book].self, forKey: .books) ?? []
         settings = try c.decodeIfPresent(ReaderSettings.self, forKey: .settings) ?? ReaderSettings()
+        shelfLayout = try c.decodeIfPresent(ShelfLayout.self, forKey: .shelfLayout) ?? .grid
     }
 
-    enum CodingKeys: String, CodingKey { case books, settings }
+    enum CodingKeys: String, CodingKey { case books, settings, shelfLayout }
 }
 
 @MainActor
@@ -44,6 +47,9 @@ final class BookLibrary {
 
     private(set) var books: [Book] = []
     var settings = ReaderSettings() {
+        didSet { scheduleSave() }
+    }
+    var shelfLayout: ShelfLayout = .grid {
         didSet { scheduleSave() }
     }
 
@@ -61,13 +67,14 @@ final class BookLibrary {
               let index = try? Coders.makeDecoder().decode(BookIndex.self, from: data) else { return }
         books = index.books
         settings = index.settings
+        shelfLayout = index.shelfLayout
     }
 
     private var saveTask: Task<Void, Never>?
 
     private func scheduleSave() {
         saveTask?.cancel()
-        let snapshot = BookIndex.make(books: books, settings: settings)
+        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout)
         saveTask = Task { [snapshot] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -77,7 +84,7 @@ final class BookLibrary {
 
     func saveNow() {
         saveTask?.cancel()
-        let snapshot = BookIndex.make(books: books, settings: settings)
+        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout)
         Task.detached(priority: .utility) { await Self.write(snapshot) }
     }
 
@@ -265,10 +272,11 @@ final class BookLibrary {
 }
 
 private extension BookIndex {
-    static func make(books: [Book], settings: ReaderSettings) -> BookIndex {
+    static func make(books: [Book], settings: ReaderSettings, shelfLayout: ShelfLayout) -> BookIndex {
         var index = BookIndex()
         index.books = books
         index.settings = settings
+        index.shelfLayout = shelfLayout
         return index
     }
 }
