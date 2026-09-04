@@ -118,7 +118,8 @@ enum Theme {
 
 // MARK: - 通用修饰符
 
-/// 扁平卡片：实色底 + 1px 描边，不用阴影
+/// 扁平卡片：只有实色底，不描边也不用阴影。
+/// 卡片和页面底色本来就有明暗差，再加一圈灰边只是把边界重复说了一遍。
 struct FlatCard: ViewModifier {
     var radius: CGFloat = Theme.Radius.card
     var padding: CGFloat = 0
@@ -127,10 +128,6 @@ struct FlatCard: ViewModifier {
         content
             .padding(padding)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 1)
-            )
     }
 }
 
