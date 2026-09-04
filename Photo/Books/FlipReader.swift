@@ -127,7 +127,7 @@ final class FlipContainerView: UIView {
                 return
             }
         case .changed:
-            flipView.update(touch: clampTouch(point))
+            flipView.update(touch: constrain(point))
         case .ended, .cancelled, .failed:
             finishDrag(at: point, velocity: gesture.velocity(in: self))
         default:
@@ -135,9 +135,26 @@ final class FlipContainerView: UIView {
         }
     }
 
-    /// 触点限制在页面高度内，横向允许拖到页外（那样才能把纸完全掀走）
-    private func clampTouch(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x, y: min(max(point.y, 0), bounds.height))
+    /// 折线是「触点 → 页角」连线的垂直平分线。
+    /// 触点如果和页角等高，折线就是竖直的，看起来就是整页从右往左扫——
+    /// 不是从角掀起。所以要保证触点相对页角有足够的斜度。
+    private static let minimumFoldSlope: CGFloat = 0.5
+
+    private func constrain(_ point: CGPoint) -> CGPoint {
+        let corner = flipView.corner
+        // 横向允许拖到页外，那样才能把纸完全掀走
+        var y = point.y
+        let horizontal = max(0, corner.x - point.x)
+        let lift = horizontal * Self.minimumFoldSlope
+
+        if corner.y > bounds.midY {
+            // 右下角：触点至少要抬到这个高度以上
+            y = min(y, corner.y - lift)
+        } else {
+            // 右上角：往下压
+            y = max(y, corner.y + lift)
+        }
+        return CGPoint(x: point.x, y: y)
     }
 
     // MARK: 翻页流程
@@ -179,13 +196,23 @@ final class FlipContainerView: UIView {
         return true
     }
 
-    /// 纸被完全掀走时触点该在哪：折线正好压在页面左边缘之外
+    /// 纸被完全掀走时触点该在哪。
+    ///
+    /// 关键是要斜着走，不能水平：水平移动会让折线保持竖直，
+    /// 出来的效果就是整页从右往左扫，而不是从角掀起。
+    /// 距离取对角线的 2.4 倍，保证整页都落到折线的另一侧、彻底翻走。
     private func foldedAwayPoint() -> CGPoint {
-        CGPoint(x: flipView.corner.x - bounds.width * 2, y: flipView.corner.y)
+        let corner = flipView.corner
+        let distance = hypot(bounds.width, bounds.height) * 2.4
+        // 约 27° 的斜角，右下角就往左上走，右上角就往左下走
+        let dx = -cos(CGFloat.pi * 27 / 180)
+        let dy = (corner.y > bounds.midY ? -1 : 1) * sin(CGFloat.pi * 27 / 180)
+        return CGPoint(x: corner.x + dx * distance, y: corner.y + dy * distance)
     }
 
     private func startFlip(forward goForward: Bool, animated: Bool) {
         guard !isAnimating else { return }
+        // 点击翻页固定用右下角起翻，和真书一致
         let corner = CGPoint(x: bounds.width, y: bounds.height)
         guard prepare(forward: goForward, touchAt: corner) else { return }
 
@@ -213,7 +240,7 @@ final class FlipContainerView: UIView {
             commit = (dragged < bounds.width / 2 || flungBack) && !flungForward
         }
 
-        let current = clampTouch(point)
+        let current = constrain(point)
         if forward {
             animate(from: current, to: commit ? foldedAwayPoint() : flipView.corner, commit: commit)
         } else {

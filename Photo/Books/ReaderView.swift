@@ -15,8 +15,10 @@ struct ReaderView: View {
     /// 不主动重建的话要等翻页才会变。
     @State private var styleRevision = 0
 
-    /// 滚动模式用
+    /// 滚动模式用。按段落切开渲染，整章塞进一个 Text 的话，
+    /// 几千上万字一次性排版，切到滚动模式会明显卡住。
     @State private var chapterText = ""
+    @State private var paragraphs: [ScrollParagraph] = []
     @State private var scrollOffset: Double = 0
 
     @State private var showChrome = false
@@ -144,11 +146,16 @@ struct ReaderView: View {
                             .padding(.top, 40)
                             .id("top")
 
-                        Text(chapterText)
-                            .font(.system(size: settings.fontSize))
-                            .foregroundStyle(theme.text)
-                            .lineSpacing(settings.lineSpacing)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // LazyVStack + 分段：只排版屏幕附近的段落
+                        LazyVStack(alignment: .leading, spacing: settings.lineSpacing + 4) {
+                            ForEach(paragraphs) { paragraph in
+                                Text(paragraph.text)
+                                    .font(.system(size: settings.fontSize))
+                                    .foregroundStyle(theme.text)
+                                    .lineSpacing(settings.lineSpacing)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
 
                         chapterNavigation
                             .padding(.top, 30)
@@ -339,7 +346,16 @@ struct ReaderView: View {
 
     private func syncScrollText() {
         guard settings.mode == .scroll else { return }
-        chapterText = library.chapterText(bookID: bookID, index: locator.chapter)
+        let text = library.chapterText(bookID: bookID, index: locator.chapter)
+        guard text != chapterText || paragraphs.isEmpty else { return }
+        chapterText = text
+        paragraphs = text
+            .components(separatedBy: "
+")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .enumerated()
+            .map { ScrollParagraph(id: $0.offset, text: $0.element) }
     }
 
     private func saveProgress() {
@@ -351,6 +367,12 @@ struct ReaderView: View {
         }
         library.updateProgress(bookID: bookID, chapterIndex: locator.chapter, characterOffset: offset)
     }
+}
+
+/// 滚动模式的一个段落
+struct ScrollParagraph: Identifiable, Hashable {
+    let id: Int
+    let text: String
 }
 
 private struct ScrollOffsetKey: PreferenceKey {
