@@ -5,7 +5,6 @@ struct RootView: View {
 
     @Environment(LibraryStore.self) private var store
     @Environment(WiFiService.self) private var wifi
-    @Environment(\.scenePhase) private var scenePhase
 
     @State private var path: [Route] = []
 
@@ -216,14 +215,7 @@ struct RootView: View {
                 ImportProgressOverlay(progress: importProgress)
             }
         }
-        // 作用在 window 上，所以 sheet、全屏预览都会跟着走
-        .onChange(of: store.appearance, initial: true) { _, theme in
-            theme.apply()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // 进入后台后 socket 会被系统回收，直接停掉避免显示"运行中"却连不上
-            if phase == .background, wifi.isRunning { wifi.stop() }
-        }
+        // 外观切换和后台停服都上移到了 MainTabView，那里能覆盖书架页
         .toast($toastItem)
     }
 

@@ -20,9 +20,11 @@ final class WiFiService {
 
     private let server = HTTPServer()
     private let store: LibraryStore
+    private let books: BookLibrary
 
-    init(store: LibraryStore) {
+    init(store: LibraryStore, books: BookLibrary) {
         self.store = store
+        self.books = books
     }
 
     var isRunning: Bool {
@@ -201,6 +203,49 @@ final class WiFiService {
                 store.saveNow()
             }
             return .ok(["saved": saved, "skipped": skipped])
+
+        // MARK: 书
+        case ("GET", "/api/books"):
+            return .json(["books": books.sortedBooks.map { book in
+                [
+                    "id": book.id.uuidString,
+                    "title": book.title,
+                    "author": book.author,
+                    "format": book.format.label,
+                    "chapters": book.chapterCount,
+                    "progress": book.progressText
+                ] as [String: Any]
+            }])
+
+        case ("POST", "/api/book/delete"):
+            guard let id = request.uuid("id") else { return .error("参数不完整") }
+            books.delete(bookID: id)
+            note("网页删除了一本书")
+            return .ok()
+
+        case ("POST", "/api/book/upload"):
+            guard let boundary = Multipart.boundary(from: request.contentType) else {
+                return .error("请求格式不正确")
+            }
+            let body = request.body
+            let parts = await Task.detached(priority: .userInitiated) {
+                Multipart.parse(body: body, boundary: boundary)
+            }.value
+
+            var saved = 0
+            var failure: String?
+            for part in parts {
+                guard let name = part.fileName, !part.data.isEmpty else { continue }
+                do {
+                    let book = try await books.importBook(data: part.data, fileName: name)
+                    saved += 1
+                    note("收到《\(book.title)》，共 \(book.chapterCount) 章")
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+            if saved == 0 { return .error(failure ?? "没有可导入的文件") }
+            return .ok(["saved": saved, "error": failure ?? ""])
 
         default:
             return .notFound

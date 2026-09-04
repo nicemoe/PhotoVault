@@ -4,18 +4,22 @@ import SwiftUI
 struct PhotoApp: App {
 
     @State private var store: LibraryStore
+    @State private var books: BookLibrary
     @State private var wifi: WiFiService
 
     init() {
         let store = LibraryStore()
+        let books = BookLibrary()
         _store = State(initialValue: store)
-        _wifi = State(initialValue: WiFiService(store: store))
+        _books = State(initialValue: books)
+        _wifi = State(initialValue: WiFiService(store: store, books: books))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            MainTabView()
                 .environment(store)
+                .environment(books)
                 .environment(wifi)
                 .tint(Theme.accent)
         }
