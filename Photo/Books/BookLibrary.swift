@@ -256,6 +256,41 @@ final class BookLibrary {
         scheduleSave()
     }
 
+    // MARK: 书签
+
+    /// 当前页是否已经有书签。按「同一章 + 偏移落在本页范围内」判断，
+    /// 而不是要求偏移完全相等——排版一变，同一句话的偏移就不同了。
+    func bookmark(bookID: UUID, chapter: Int, pageRange: Range<Int>) -> Bookmark? {
+        book(bookID)?.bookmarks.first {
+            $0.chapterIndex == chapter && pageRange.contains($0.characterOffset)
+        }
+    }
+
+    @discardableResult
+    func addBookmark(bookID: UUID, chapter: Int, offset: Int, title: String, snippet: String) -> Bookmark? {
+        guard let i = books.firstIndex(where: { $0.id == bookID }) else { return nil }
+        let mark = Bookmark(chapterIndex: chapter,
+                            characterOffset: offset,
+                            chapterTitle: title,
+                            snippet: snippet)
+        books[i].bookmarks.append(mark)
+        saveNow()
+        return mark
+    }
+
+    func removeBookmark(bookID: UUID, markID: UUID) {
+        guard let i = books.firstIndex(where: { $0.id == bookID }) else { return }
+        books[i].bookmarks.removeAll { $0.id == markID }
+        saveNow()
+    }
+
+    /// 书签列表：新加的排前面
+    func bookmarks(bookID: UUID) -> [Bookmark] {
+        (book(bookID)?.bookmarks ?? []).sorted { $0.createdAt > $1.createdAt }
+    }
+
+    // MARK: 修改
+
     func rename(bookID: UUID, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let i = books.firstIndex(where: { $0.id == bookID }) else { return }

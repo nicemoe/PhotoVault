@@ -34,6 +34,18 @@ struct ReadingProgress: Codable, Hashable {
     var updatedAt: Date = Date()
 }
 
+/// 书签。存章节 + 章内字符偏移，和阅读进度同一套定位方式，
+/// 所以改字号、换翻页模式之后依然能跳回原来那句话。
+struct Bookmark: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var chapterIndex: Int
+    var characterOffset: Int
+    var chapterTitle: String
+    /// 书签处的开头几十个字，方便在列表里认出来
+    var snippet: String
+    var createdAt: Date = Date()
+}
+
 struct Book: Identifiable, Codable, Hashable {
     var id = UUID()
     var title: String
@@ -45,6 +57,40 @@ struct Book: Identifiable, Codable, Hashable {
     var progress = ReadingProgress()
     /// 封面色，按书名哈希取，避免每本书都长一样
     var colorIndex: Int = 0
+    var bookmarks: [Bookmark] = []
+
+    init(id: UUID = UUID(), title: String, author: String = "", format: BookFormat,
+         addedAt: Date = Date(), chapters: [ChapterMeta] = [], totalCharacters: Int = 0,
+         progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
+         bookmarks: [Bookmark] = []) {
+        self.id = id
+        self.title = title
+        self.author = author
+        self.format = format
+        self.addedAt = addedAt
+        self.chapters = chapters
+        self.totalCharacters = totalCharacters
+        self.progress = progress
+        self.colorIndex = colorIndex
+        self.bookmarks = bookmarks
+    }
+
+    /// 手写解码，全部 decodeIfPresent。
+    /// Swift 合成的 Decodable 不拿属性默认值兜缺失的键，直接抛错——
+    /// 那样每加一个字段，旧的 books.json 就解不出来，整个书架会被清空。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
+        format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
+        addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
+        chapters = try c.decodeIfPresent([ChapterMeta].self, forKey: .chapters) ?? []
+        totalCharacters = try c.decodeIfPresent(Int.self, forKey: .totalCharacters) ?? 0
+        progress = try c.decodeIfPresent(ReadingProgress.self, forKey: .progress) ?? ReadingProgress()
+        colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
+        bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
+    }
 
     var chapterCount: Int { chapters.count }
 
@@ -225,9 +271,14 @@ struct ReaderSettings: Codable, Hashable {
     var pageAnimation: PageAnimation = .curl
     /// 段首缩进两个字
     var firstLineIndent: Bool = true
+    /// 自动翻页的间隔（秒）
+    var autoFlipInterval: Double = 8
+    /// 阅读时的屏幕亮度。nil = 跟随系统，不去动它。
+    var brightness: Double?
 
     static let fontSizeRange: ClosedRange<Double> = 13...30
     static let lineSpacingRange: ClosedRange<Double> = 2...20
+    static let autoFlipRange: ClosedRange<Double> = 3...30
 
     init() {}
 
@@ -246,5 +297,7 @@ struct ReaderSettings: Codable, Hashable {
         mode = try c.decodeIfPresent(ReadingMode.self, forKey: .mode) ?? .paged
         pageAnimation = try c.decodeIfPresent(PageAnimation.self, forKey: .pageAnimation) ?? .curl
         firstLineIndent = try c.decodeIfPresent(Bool.self, forKey: .firstLineIndent) ?? true
+        autoFlipInterval = try c.decodeIfPresent(Double.self, forKey: .autoFlipInterval) ?? 8
+        brightness = try c.decodeIfPresent(Double.self, forKey: .brightness)
     }
 }

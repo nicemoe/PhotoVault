@@ -7,10 +7,14 @@ struct ChapterListSheet: View {
     let book: Book
     let current: Int
     var onPick: (Int) -> Void
+    var onPickBookmark: (Bookmark) -> Void
 
+    @Environment(BookLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss
     @State private var keyword = ""
     @State private var reversed = false
+    /// 目录和书签放同一个面板，用分段切换，不额外占工具栏位置
+    @State private var tab = 0
 
     private var chapters: [ChapterMeta] {
         let base = keyword.isEmpty
@@ -21,6 +25,73 @@ struct ChapterListSheet: View {
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    Text("目录").tag(0)
+                    Text("书签").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Theme.Metric.margin)
+                .padding(.vertical, 10)
+
+                if tab == 0 { chapterList } else { bookmarkList }
+            }
+            .background(Theme.background)
+            .navigationTitle(tab == 0 ? "共 \(book.chapterCount) 章" : "书签")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if tab == 0 {
+                        Button(reversed ? "正序" : "倒序") { reversed.toggle() }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var bookmarkList: some View {
+        let marks = library.bookmarks(bookID: book.id)
+        return Group {
+            if marks.isEmpty {
+                EmptyState(icon: "bookmark",
+                           title: "还没有书签",
+                           message: "阅读时点右上角的书签图标，就能把当前这页记下来")
+            } else {
+                List {
+                    ForEach(marks) { mark in
+                        Button {
+                            onPickBookmark(mark)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(mark.chapterTitle)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.accent)
+                                Text(mark.snippet)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Theme.label)
+                                    .lineLimit(2)
+                            }
+                            .tappableArea()
+                        }
+                        .listRowBackground(Theme.surface)
+                    }
+                    .onDelete { offsets in
+                        for index in offsets {
+                            library.removeBookmark(bookID: book.id, markID: marks[index].id)
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    private var chapterList: some View {
             ScrollViewReader { proxy in
                 List {
                     ForEach(chapters) { chapter in
@@ -53,17 +124,6 @@ struct ChapterListSheet: View {
                 }
             }
             .searchable(text: $keyword, prompt: "搜索章节")
-            .navigationTitle("共 \(book.chapterCount) 章")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(reversed ? "正序" : "倒序") { reversed.toggle() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
-                }
-            }
-        }
     }
 }
 
@@ -253,6 +313,45 @@ struct ReaderSettingsSheet: View {
                                 }
                             }
                             .pickerStyle(.segmented)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            label("亮度")
+                            Spacer()
+                            if library.settings.brightness != nil {
+                                Button("跟随系统") { adjust { $0.brightness = nil } }
+                                    .font(.system(size: 12.5, weight: .semibold))
+                            }
+                        }
+                        HStack(spacing: 10) {
+                            Image(systemName: "sun.min").foregroundStyle(Theme.secondaryLabel)
+                            Slider(value: Binding(
+                                get: { library.settings.brightness ?? Double(UIScreen.main.brightness) },
+                                set: { value in adjust { $0.brightness = value } }
+                            ), in: 0.05...1)
+                            Image(systemName: "sun.max").foregroundStyle(Theme.secondaryLabel)
+                        }
+                        .font(.system(size: 13))
+                        Text("只在阅读时生效，退出后会还原系统亮度")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.tertiaryLabel)
+                    }
+
+                    if library.settings.mode == .paged {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                label("自动翻页间隔")
+                                Spacer()
+                                Text("\(Int(library.settings.autoFlipInterval)) 秒")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Theme.label)
+                            }
+                            Slider(value: Binding(
+                                get: { library.settings.autoFlipInterval },
+                                set: { value in adjust { $0.autoFlipInterval = value.rounded() } }
+                            ), in: ReaderSettings.autoFlipRange, step: 1)
                         }
                     }
 

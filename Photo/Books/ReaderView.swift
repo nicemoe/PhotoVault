@@ -5,6 +5,7 @@ struct ReaderView: View {
     let bookID: UUID
 
     @Environment(BookLibrary.self) private var library
+    @Environment(WiFiService.self) private var wifi
     @Environment(\.dismiss) private var dismiss
 
     /// 翻页模式的当前位置。分页交给 PageSource，这里只记「第几章第几页」。
@@ -25,6 +26,16 @@ struct ReaderView: View {
     @State private var showChapters = false
     @State private var showSettings = false
     @State private var showSearch = false
+
+    /// 自动翻页
+    @State private var isAutoFlipping = false
+    /// 每 +1 让翻页容器往前翻一页。用计数器而不是布尔，
+    /// 连续自动翻页时每次都是新值，容器才知道要再翻一次。
+    @State private var autoAdvanceToken = 0
+
+    /// 进入阅读器之前的系统亮度，退出时还回去，
+    /// 免得把用户整台设备的亮度改了还不还
+    @State private var systemBrightness: CGFloat?
 
     private var book: Book? { library.book(bookID) }
     private var settings: ReaderSettings { library.settings }
@@ -52,18 +63,46 @@ struct ReaderView: View {
         .navigationBarHidden(true)
         .task(id: bookID) { restoreProgress() }
         .onChange(of: locator) { _, _ in saveProgress() }
-        .onChange(of: settings.mode) { _, _ in syncScrollText() }
-        .onDisappear { saveProgress() }
+        .onChange(of: settings.mode) { _, _ in
+            syncScrollText()
+            // 滚动模式下没有「页」可翻，自动翻页就停掉
+            if settings.mode == .scroll { isAutoFlipping = false }
+        }
+        // 自动翻页：isAutoFlipping 变 false 时 task 自动取消
+        .task(id: isAutoFlipping) {
+            guard isAutoFlipping else { return }
+            UIApplication.shared.isIdleTimerDisabled = true
+            defer { UIApplication.shared.isIdleTimerDisabled = wifi.isRunning }
+
+            while !Task.isCancelled && isAutoFlipping {
+                try? await Task.sleep(for: .seconds(settings.autoFlipInterval))
+                guard !Task.isCancelled, isAutoFlipping else { return }
+                guard let source = pageSource, source.next(locator) != nil else {
+                    isAutoFlipping = false   // 到全书末尾了
+                    return
+                }
+                autoAdvanceToken &+= 1
+            }
+        }
+        .onAppear { applyBrightness() }
+        .onChange(of: settings.brightness) { _, _ in applyBrightness() }
+        .onDisappear {
+            saveProgress()
+            isAutoFlipping = false
+            restoreBrightness()
+        }
         .sheet(isPresented: $showChapters) {
             if let book {
                 ChapterListSheet(book: book, current: locator.chapter) { index in
                     jump(chapter: index, offset: 0, dismissingChrome: true)
+                } onPickBookmark: { mark in
+                    jump(chapter: mark.chapterIndex, offset: mark.characterOffset, dismissingChrome: true)
                 }
             }
         }
         .sheet(isPresented: $showSettings) {
             ReaderSettingsSheet()
-                .presentationDetents([.height(400)])
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showSearch) {
             if let book {
@@ -109,6 +148,7 @@ struct ReaderView: View {
                                             background: UIColor(theme.background),
                                             chromeVisible: showChrome,
                                             revision: styleRevision,
+                                            autoAdvance: autoAdvanceToken,
                                             locator: $locator,
                                             onToggleChrome: toggleChrome)
                     case .slide:
@@ -131,6 +171,7 @@ struct ReaderView: View {
                        background: UIColor(theme.background),
                        chromeVisible: showChrome,
                        revision: styleRevision,
+                       autoAdvance: autoAdvanceToken,
                        locator: $locator,
                        onToggleChrome: toggleChrome)
     }
@@ -254,6 +295,14 @@ struct ReaderView: View {
                         .lineLimit(1)
                 }
                 Spacer()
+
+                Button(action: toggleBookmark) {
+                    Image(systemName: currentBookmark == nil ? "bookmark" : "bookmark.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(currentBookmark == nil ? theme.text : Theme.accent)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
             }
             .foregroundStyle(theme.text)
             .padding(.horizontal, 18)
@@ -265,6 +314,14 @@ struct ReaderView: View {
             HStack(spacing: 0) {
                 toolButton("目录", "list.bullet") { showChapters = true }
                 toolButton("搜索", "magnifyingglass") { showSearch = true }
+                toolButton(isAutoFlipping ? "停止" : "自动",
+                           isAutoFlipping ? "pause.circle" : "play.circle",
+                           highlighted: isAutoFlipping) {
+                    // 滚动模式没有「页」的概念，自动翻页只在翻页模式下有意义
+                    guard settings.mode == .paged else { return }
+                    isAutoFlipping.toggle()
+                }
+                .opacity(settings.mode == .paged ? 1 : 0.35)
                 // 翻页/滚动的切换放在「设置」里就够了。摆在工具栏上显示的是
                 // 当前模式名，看着像个动作，容易读成「点它会翻页」。
                 toolButton(theme.isDark ? "日间" : "夜间", theme.isDark ? "sun.max" : "moon") {
@@ -281,20 +338,79 @@ struct ReaderView: View {
         .transition(.opacity)
     }
 
-    private func toolButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    private func toolButton(_ title: String, _ icon: String,
+                           highlighted: Bool = false,
+                           action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Image(systemName: icon).font(.system(size: 17))
                 Text(title).font(.system(size: 11))
             }
             .frame(maxWidth: .infinity)
-            .foregroundStyle(theme.text)
+            .foregroundStyle(highlighted ? Theme.accent : theme.text)
             .contentShape(Rectangle())
         }
     }
 
     private func toggleChrome() {
         withAnimation(.easeOut(duration: 0.18)) { showChrome.toggle() }
+    }
+
+    // MARK: 亮度
+
+    /// 只在阅读器内接管亮度。进来先记下系统值，出去还回去——
+    /// 看本书把整台设备的亮度改了不还，是很讨厌的行为。
+    private func applyBrightness() {
+        guard let value = settings.brightness else {
+            restoreBrightness()
+            return
+        }
+        if systemBrightness == nil { systemBrightness = UIScreen.main.brightness }
+        UIScreen.main.brightness = CGFloat(value)
+    }
+
+    private func restoreBrightness() {
+        if let original = systemBrightness {
+            UIScreen.main.brightness = original
+            systemBrightness = nil
+        }
+    }
+
+    // MARK: 书签
+
+    /// 当前页覆盖的字符范围，用来判断这一页是否已被收藏
+    private var currentPageRange: Range<Int> {
+        guard let source = pageSource else {
+            return locator.chapter..<(locator.chapter + 1)
+        }
+        let start = source.characterOffset(of: locator)
+        let ranges = source.pages(locator.chapter)
+        let length = ranges.indices.contains(locator.page) ? ranges[locator.page].length : 1
+        return start..<(start + max(1, length))
+    }
+
+    private var currentBookmark: Bookmark? {
+        library.bookmark(bookID: bookID, chapter: locator.chapter, pageRange: currentPageRange)
+    }
+
+    private func toggleBookmark() {
+        if let existing = currentBookmark {
+            library.removeBookmark(bookID: bookID, markID: existing.id)
+            return
+        }
+        let offset = pageSource?.characterOffset(of: locator) ?? 0
+        let text = library.chapterText(bookID: bookID, index: locator.chapter)
+        let start = text.index(text.startIndex, offsetBy: min(offset, text.count))
+        let end = text.index(start, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
+        let snippet = String(text[start..<end])
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+
+        library.addBookmark(bookID: bookID,
+                            chapter: locator.chapter,
+                            offset: offset,
+                            title: currentChapterTitle,
+                            snippet: snippet)
     }
 
     // MARK: 数据

@@ -215,6 +215,11 @@ final class FlipContainerView: UIView {
         return CGPoint(x: corner.x + dx * distance, y: corner.y + dy * distance)
     }
 
+    /// 自动翻页调这个，效果和用户点右侧一样
+    func flipForward() {
+        startFlip(forward: true, animated: true)
+    }
+
     private func startFlip(forward goForward: Bool, animated: Bool) {
         guard !isAnimating else { return }
         // 点击翻页固定用右下角起翻，和真书一致
@@ -306,6 +311,8 @@ struct SimulatedFlipReader: UIViewRepresentable {
     let background: UIColor
     let chromeVisible: Bool
     let revision: Int
+    /// 自动翻页的计数器，每 +1 往前翻一页
+    let autoAdvance: Int
     @Binding var locator: PageLocator
     var onToggleChrome: () -> Void
 
@@ -313,15 +320,23 @@ struct SimulatedFlipReader: UIViewRepresentable {
         let view = FlipContainerView()
         configure(view)
         context.coordinator.appliedRevision = revision
+        context.coordinator.appliedAutoAdvance = autoAdvance
         return view
     }
 
     func updateUIView(_ view: FlipContainerView, context: Context) {
         let styleChanged = context.coordinator.appliedRevision != revision
+        let autoFired = context.coordinator.appliedAutoAdvance != autoAdvance
         let jumped = view.locator != locator
 
         configure(view)
 
+        if autoFired {
+            context.coordinator.appliedAutoAdvance = autoAdvance
+            // 走正常的翻页动画，和用户点击的效果一致
+            view.flipForward()
+            return
+        }
         if styleChanged {
             context.coordinator.appliedRevision = revision
             view.refresh()
@@ -344,5 +359,6 @@ struct SimulatedFlipReader: UIViewRepresentable {
 
     final class Coordinator {
         var appliedRevision = -1
+        var appliedAutoAdvance = 0
     }
 }

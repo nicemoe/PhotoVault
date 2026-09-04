@@ -176,6 +176,8 @@ struct PageCurlReader: UIViewControllerRepresentable {
     let chromeVisible: Bool
     /// 排版版本号。变了就说明字号/主题/行距改过，当前页要重建。
     let revision: Int
+    /// 自动翻页的计数器，每 +1 往前翻一页
+    let autoAdvance: Int
     @Binding var locator: PageLocator
     var onToggleChrome: () -> Void
 
@@ -197,6 +199,7 @@ struct PageCurlReader: UIViewControllerRepresentable {
         }
         context.coordinator.disableBuiltInTaps(on: controller)
         context.coordinator.appliedRevision = revision
+        context.coordinator.appliedAutoAdvance = autoAdvance
         return controller
     }
 
@@ -207,6 +210,19 @@ struct PageCurlReader: UIViewControllerRepresentable {
         context.coordinator.disableBuiltInTaps(on: controller)
 
         let current = (controller.viewControllers?.first as? ReaderPageController)?.locator
+
+        // 自动翻页：走动画，和手动翻一致
+        if context.coordinator.appliedAutoAdvance != autoAdvance {
+            context.coordinator.appliedAutoAdvance = autoAdvance
+            if let from = current,
+               let target = source.next(from),
+               let page = context.coordinator.makePage(target) {
+                controller.setViewControllers([page], direction: .forward, animated: true) { done in
+                    if done { locator = target }
+                }
+            }
+            return
+        }
 
         // 排版变了：当前页的背景色和属性串是创建时烘焙的，必须重建，
         // 否则改主题/字号后要等翻页才生效
@@ -234,6 +250,7 @@ struct PageCurlReader: UIViewControllerRepresentable {
         /// 点击翻页时要用它来播动画，数据源回调里顺手记下来
         weak var container: UIPageViewController?
         var appliedRevision = -1
+        var appliedAutoAdvance = 0
         private var tapsDisabled = false
 
         init(_ parent: PageCurlReader) { self.parent = parent }
