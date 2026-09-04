@@ -20,7 +20,12 @@ struct ReaderView: View {
     /// 几千上万字一次性排版，切到滚动模式会明显卡住。
     @State private var chapterText = ""
     @State private var paragraphs: [ScrollParagraph] = []
-    @State private var scrollOffset: Double = 0
+    /// 滚动模式当前读到的章内字符偏移。
+    /// 不能存像素滚动量——那和翻页模式存的字符偏移是两个量纲，
+    /// 切换模式时会算出完全不相干的位置。
+    @State private var scrollCharacterOffset = 0
+    /// 进入滚动模式后要恢复到的位置
+    @State private var pendingScrollOffset: Int?
 
     @State private var showChrome = false
     @State private var showChapters = false
@@ -63,10 +68,18 @@ struct ReaderView: View {
         .navigationBarHidden(true)
         .task(id: bookID) { restoreProgress() }
         .onChange(of: locator) { _, _ in saveProgress() }
-        .onChange(of: settings.mode) { _, _ in
-            syncScrollText()
-            // 滚动模式下没有「页」可翻，自动翻页就停掉
-            if settings.mode == .scroll { isAutoFlipping = false }
+        .onChange(of: settings.mode) { _, mode in
+            if mode == .scroll {
+                // 从翻页切过来：把当前页的字符偏移带过去，位置才不会跳
+                pendingScrollOffset = pageSource?.characterOffset(of: locator) ?? 0
+                isAutoFlipping = false   // 滚动模式没有「页」可翻
+                syncScrollText()
+            } else {
+                // 从滚动切回来：按滚动位置重新定位到对应的页
+                if let source = pageSource {
+                    locator = source.locator(chapter: locator.chapter, offset: scrollCharacterOffset)
+                }
+            }
         }
         // 自动翻页：isAutoFlipping 变 false 时 task 自动取消
         .task(id: isAutoFlipping) {
@@ -195,6 +208,14 @@ struct ReaderView: View {
                                     .foregroundStyle(theme.text)
                                     .lineSpacing(settings.lineSpacing)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(paragraph.id)
+                                    .background(
+                                        GeometryReader { g in
+                                            Color.clear.preference(
+                                                key: VisibleParagraphKey.self,
+                                                value: [paragraph.id: g.frame(in: .named("reader")).minY])
+                                        }
+                                    )
                             }
                         }
 
@@ -203,20 +224,28 @@ struct ReaderView: View {
                             .padding(.bottom, 40)
                     }
                     .padding(.horizontal, settings.margin)
-                    .background(
-                        GeometryReader { inner in
-                            Color.clear.preference(key: ScrollOffsetKey.self,
-                                                   value: -inner.frame(in: .named("reader")).minY)
-                        }
-                    )
                 }
                 .coordinateSpace(name: "reader")
-                .onPreferenceChange(ScrollOffsetKey.self) { value in
-                    scrollOffset = max(0, Double(value))
+                .onPreferenceChange(VisibleParagraphKey.self) { frames in
+                    // 取「已经滚过视口顶部的最后一段」，没有就取最靠上的那段
+                    let passed = frames.filter { $0.value <= 8 }
+                    let id = passed.max(by: { $0.value < $1.value })?.key
+                        ?? frames.min(by: { $0.value < $1.value })?.key
+                    if let id, let para = paragraphs.first(where: { $0.id == id }) {
+                        scrollCharacterOffset = para.offset
+                    }
                 }
                 .onChange(of: locator.chapter) { _, _ in
                     syncScrollText()
                     proxy.scrollTo("top", anchor: .top)
+                }
+                .onChange(of: pendingScrollOffset) { _, target in
+                    guard let target else { return }
+                    restoreScroll(to: target, with: proxy)
+                }
+                .task(id: paragraphs.count) {
+                    guard let target = pendingScrollOffset else { return }
+                    restoreScroll(to: target, with: proxy)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { location in
@@ -446,6 +475,9 @@ struct ReaderView: View {
         guard let book else { return }
         locator = PageLocator(chapter: book.progress.chapterIndex, page: 0)
         syncScrollText()
+        if settings.mode == .scroll {
+            pendingScrollOffset = book.progress.characterOffset
+        }
     }
 
     /// 跳章。
@@ -461,6 +493,7 @@ struct ReaderView: View {
             locator = PageLocator(chapter: chapter, page: 0)
         }
         syncScrollText()
+        if settings.mode == .scroll { pendingScrollOffset = offset }
         saveProgress()
 
         if dismissingChrome, showChrome {
@@ -468,17 +501,32 @@ struct ReaderView: View {
         }
     }
 
+    /// 滚到包含该字符偏移的那一段
+    private func restoreScroll(to offset: Int, with proxy: ScrollViewProxy) {
+        guard !paragraphs.isEmpty else { return }
+        let target = paragraphs.last { $0.offset <= offset } ?? paragraphs[0]
+        proxy.scrollTo(target.id, anchor: .top)
+        scrollCharacterOffset = target.offset
+        pendingScrollOffset = nil
+    }
+
     private func syncScrollText() {
         guard settings.mode == .scroll else { return }
         let text = library.chapterText(bookID: bookID, index: locator.chapter)
         guard text != chapterText || paragraphs.isEmpty else { return }
         chapterText = text
-        paragraphs = text
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .enumerated()
-            .map { ScrollParagraph(id: $0.offset, text: $0.element) }
+
+        // 一边切段一边累计字符偏移，滚动位置才能和翻页模式互相换算
+        var result: [ScrollParagraph] = []
+        var cursor = 0
+        for raw in text.components(separatedBy: .newlines) {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                result.append(ScrollParagraph(id: result.count, text: trimmed, offset: cursor))
+            }
+            cursor += raw.count + 1   // +1 是被吃掉的换行符
+        }
+        paragraphs = result
     }
 
     private func saveProgress() {
@@ -486,21 +534,26 @@ struct ReaderView: View {
         if settings.mode == .paged {
             offset = pageSource?.characterOffset(of: locator) ?? 0
         } else {
-            offset = Int(scrollOffset)
+            offset = scrollCharacterOffset
         }
         library.updateProgress(bookID: bookID, chapterIndex: locator.chapter, characterOffset: offset)
     }
 }
 
-/// 滚动模式的一个段落
+/// 滚动模式的一个段落。
+/// offset 是这一段在本章正文里的字符起点，用来和翻页模式换算位置。
 struct ScrollParagraph: Identifiable, Hashable {
     let id: Int
     let text: String
+    let offset: Int
 }
 
-private struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+/// 收集可见段落的顶部位置，用来判断当前读到哪一段
+private struct VisibleParagraphKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
+
+

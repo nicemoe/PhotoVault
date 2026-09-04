@@ -116,23 +116,43 @@ final class FlipContainerView: UIView {
         }
     }
 
+    /// 手指按下的位置。方向要等真的动起来才能判断。
+    private var dragStart: CGPoint = .zero
+    /// 还没判出方向时为 true
+    private var awaitingDirection = false
+
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard !isAnimating else { return }
         let point = gesture.location(in: self)
 
         switch gesture.state {
         case .began:
-            let translation = gesture.translation(in: self)
-            // 往左拖 = 去下一页；往右拖 = 回上一页
-            let goForward = translation.x <= 0
-            guard prepare(forward: goForward, touchAt: point) else {
-                gesture.state = .cancelled
+            // 不能在这里判方向：.began 时 translation 还是 (0,0)，
+            // 用 translation.x <= 0 会把 0 也算成「往左」，
+            // 结果永远判成往后翻，往前翻根本触发不了。
+            dragStart = point
+            awaitingDirection = true
+
+        case .changed:
+            if awaitingDirection {
+                let translation = gesture.translation(in: self)
+                // 等移动够一段距离，方向才可信
+                guard abs(translation.x) > 6 else { return }
+                awaitingDirection = false
+                guard prepare(forward: translation.x < 0, touchAt: dragStart) else {
+                    gesture.state = .cancelled
+                    return
+                }
+            }
+            flipView.update(touch: constrain(point))
+
+        case .ended, .cancelled, .failed:
+            guard !awaitingDirection else {
+                awaitingDirection = false
                 return
             }
-        case .changed:
-            flipView.update(touch: constrain(point))
-        case .ended, .cancelled, .failed:
             finishDrag(at: point, velocity: gesture.velocity(in: self))
+
         default:
             break
         }
