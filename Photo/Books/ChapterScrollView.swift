@@ -149,6 +149,18 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
     /// 位置变了（章号，章内字符偏移）
     var onPositionChange: ((Int, Int) -> Void)?
     var onToggleChrome: (() -> Void)?
+    /// 自动滚到全书末尾了
+    var onReachEnd: (() -> Void)?
+
+    /// 自动滚动。匀速往上推，不是一页页跳。
+    var isAutoScrolling = false {
+        didSet {
+            guard isAutoScrolling != oldValue else { return }
+            if isAutoScrolling { startAutoScroll() } else { stopAutoScroll() }
+        }
+    }
+    /// 走完一屏用几秒，和翻页模式共用同一个设置
+    var autoScrollInterval: Double = 8
 
     private let collectionView: UICollectionView
     private var items: [PageItem] = []
@@ -161,9 +173,16 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
     private var isRestoring = false
     private var lastWidth: CGFloat = 0
     private var lastReported = (chapter: -1, offset: -1)
+    private var reportedChapter = -1
 
     /// 最多留几章，再多就把离得远的那头丢掉
     private let maxChapters = 4
+
+    private var displayLink: CADisplayLink?
+    private var lastTick: CFTimeInterval = 0
+    /// 上次把位置报出去的时刻。自动滚动时每帧都报的话，
+    /// SwiftIU 每帧重算一次 body，会明显掉帧。
+    private var lastReportTime: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         let layout = UICollectionViewFlowLayout()
@@ -368,6 +387,14 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
         guard pos.chapter != lastReported.chapter || pos.offset != lastReported.offset else { return }
         lastReported = pos
         desired = pos          // 用户滚到哪，重排时就回哪
+
+        // 往外报会让 SwiftUI 重算一次 body。自动滚动时每帧都报的话
+        // 一秒六十次，明显掉帧。换章要立刻报，其余的限到每秒四次。
+        let now = CACurrentMediaTime()
+        let changedChapter = pos.chapter != reportedChapter
+        guard changedChapter || now - lastReportTime > 0.25 else { return }
+        lastReportTime = now
+        reportedChapter = pos.chapter
         onPositionChange?(pos.chapter, pos.offset)
     }
 
@@ -431,6 +458,51 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
         isRestoring = false
     }
 
+    // MARK: 自动滚动
+
+    private func startAutoScroll() {
+        stopAutoScroll()
+        lastTick = 0
+        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    private func stopAutoScroll() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        guard bounds.height > 1, !items.isEmpty else { return }
+        // 手指还在屏幕上就先让开，松手接着走
+        guard !collectionView.isTracking, !collectionView.isDragging else {
+            lastTick = 0
+            return
+        }
+        // 第一帧只记时间。用固定步长会随刷新率变速——
+        // 120Hz 的机器上会正好快一倍。
+        guard lastTick > 0 else {
+            lastTick = link.timestamp
+            return
+        }
+        let elapsed = link.timestamp - lastTick
+        lastTick = link.timestamp
+
+        let speed = bounds.height / CGFloat(max(1, autoScrollInterval))   // 每秒走多少点
+        let maxY = max(0, contentHeight - bounds.height)
+        let y = collectionView.contentOffset.y + speed * CGFloat(elapsed)
+
+        let atLastChapter = items.last?.chapter == chapterTitles.count - 1
+        if y >= maxY, atLastChapter {
+            collectionView.setContentOffset(CGPoint(x: 0, y: maxY), animated: false)
+            isAutoScrolling = false
+            onReachEnd?()
+            return
+        }
+        collectionView.setContentOffset(CGPoint(x: 0, y: min(y, maxY)), animated: false)
+    }
+
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         // 工具栏亮着时点哪儿都只收起它，和翻页模式一致
         if chromeVisible { onToggleChrome?(); return }
@@ -458,8 +530,11 @@ struct ChapterScrollReader: UIViewRepresentable {
     let chromeVisible: Bool
     let revision: Int
     let jump: ScrollJump
+    let autoScrolling: Bool
+    let autoScrollInterval: Double
     var onPositionChange: (Int, Int) -> Void
     var onToggleChrome: () -> Void
+    var onReachEnd: () -> Void
 
     func makeUIView(context: Context) -> ChapterScrollContainer {
         let view = ChapterScrollContainer()
@@ -495,6 +570,14 @@ struct ChapterScrollReader: UIViewRepresentable {
         view.chromeVisible = chromeVisible
         view.onToggleChrome = onToggleChrome
         view.onPositionChange = onPositionChange
+        view.onReachEnd = onReachEnd
+        view.autoScrollInterval = autoScrollInterval
+        view.isAutoScrolling = autoScrolling
+    }
+
+    /// CADisplayLink 会持有 target，视图被拆掉时不停就永远释放不了
+    static func dismantleUIView(_ view: ChapterScrollContainer, coordinator: Coordinator) {
+        view.isAutoScrolling = false
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

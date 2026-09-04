@@ -339,10 +339,10 @@ struct ReaderSettingsSheet: View {
                             .foregroundStyle(Theme.tertiaryLabel)
                     }
 
-                    if library.settings.mode == .paged {
-                        VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Group {
                             HStack {
-                                label("自动翻页间隔")
+                                label(library.settings.mode == .scroll ? "自动滚动一屏用时" : "自动翻页间隔")
                                 Spacer()
                                 Text("\(Int(library.settings.autoFlipInterval)) 秒")
                                     .font(.system(size: 13, weight: .semibold, design: .rounded))

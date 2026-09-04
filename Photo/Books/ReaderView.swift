@@ -69,8 +69,8 @@ struct ReaderView: View {
         .onChange(of: locator) { _, _ in saveProgress() }
         .onChange(of: settings.mode) { _, mode in
             if mode == .scroll {
-                // 从翻页切过来：把当前页的字符偏移带过去
-                isAutoFlipping = false   // 滚动模式没有「页」可翻
+                // 从翻页切过来：把当前页的字符偏移带过去。
+                // 自动播放不用停，滚动模式下它变成匀速自动滚动。
                 requestScroll(chapter: locator.chapter,
                               offset: pageSource?.characterOffset(of: locator) ?? 0)
             } else {
@@ -85,6 +85,12 @@ struct ReaderView: View {
             defer { UIApplication.shared.isIdleTimerDisabled = wifi.isRunning }
 
             while !Task.isCancelled && isAutoFlipping {
+                // 滚动模式是匀速推进，由容器的 CADisplayLink 驱动，
+                // 这里只剩「别让屏幕自己锁掉」这一件事
+                guard settings.mode == .paged else {
+                    try? await Task.sleep(for: .seconds(1))
+                    continue
+                }
                 try? await Task.sleep(for: .seconds(settings.autoFlipInterval))
                 guard !Task.isCancelled, isAutoFlipping else { return }
                 guard let source = pageSource, source.next(locator) != nil else {
@@ -206,6 +212,8 @@ struct ReaderView: View {
                         chromeVisible: showChrome,
                         revision: styleRevision,
                         jump: scrollJump,
+                        autoScrolling: isAutoFlipping,
+                        autoScrollInterval: settings.autoFlipInterval,
                         onPositionChange: { chapter, offset in
                             scrollCharacterOffset = offset
                             // 滚过章界了，把当前章同步过来，信息条和目录才跟得上
@@ -213,7 +221,8 @@ struct ReaderView: View {
                                 locator = PageLocator(chapter: chapter, page: 0)
                             }
                         },
-                        onToggleChrome: toggleChrome)
+                        onToggleChrome: toggleChrome,
+                        onReachEnd: { isAutoFlipping = false })
                 } else {
                     Spacer()
                 }
@@ -286,14 +295,11 @@ struct ReaderView: View {
             HStack(spacing: 0) {
                 toolButton("目录", "list.bullet") { showChapters = true }
                 toolButton("搜索", "magnifyingglass") { showSearch = true }
-                toolButton(isAutoFlipping ? "停止" : "自动",
+                toolButton(isAutoFlipping ? "停止" : (settings.mode == .scroll ? "自动滚动" : "自动翻页"),
                            isAutoFlipping ? "pause.circle" : "play.circle",
                            highlighted: isAutoFlipping) {
-                    // 滚动模式没有「页」的概念，自动翻页只在翻页模式下有意义
-                    guard settings.mode == .paged else { return }
                     isAutoFlipping.toggle()
                 }
-                .opacity(settings.mode == .paged ? 1 : 0.35)
                 // 翻页/滚动的切换放在「设置」里就够了。摆在工具栏上显示的是
                 // 当前模式名，看着像个动作，容易读成「点它会翻页」。
                 toolButton(theme.isDark ? "日间" : "夜间", theme.isDark ? "sun.max" : "moon") {
