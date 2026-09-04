@@ -57,7 +57,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showChapters) {
             if let book {
                 ChapterListSheet(book: book, current: locator.chapter) { index in
-                    jump(chapter: index, offset: 0)
+                    jump(chapter: index, offset: 0, dismissingChrome: true)
                 }
             }
         }
@@ -68,7 +68,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showSearch) {
             if let book {
                 BookSearchSheet(book: book) { hit in
-                    jump(chapter: hit.chapterIndex, offset: hit.offset)
+                    jump(chapter: hit.chapterIndex, offset: hit.offset, dismissingChrome: true)
                 }
             }
         }
@@ -332,8 +332,12 @@ struct ReaderView: View {
         syncScrollText()
     }
 
-    /// 跳章：目录、搜索、上下一章都走这里
-    private func jump(chapter: Int, offset: Int) {
+    /// 跳章。
+    ///
+    /// - Parameter dismissingChrome: 只有「明确指定了目的地」的跳转才收工具栏
+    ///   （目录、搜索）。上一章/下一章是可重复的顺序浏览，用户可能连点好几次
+    ///   找位置，替他收起来等于替他断定「你不会再点了」。
+    private func jump(chapter: Int, offset: Int, dismissingChrome: Bool = false) {
         guard let book, book.chapters.indices.contains(chapter) else { return }
         if let source = pageSource {
             locator = source.locator(chapter: chapter, offset: offset)
@@ -343,9 +347,7 @@ struct ReaderView: View {
         syncScrollText()
         saveProgress()
 
-        // 跳完就把工具栏收起来：用户打开目录/搜索的目的就是换个地方读，
-        // 目的达成之后工具栏只会挡着正文
-        if showChrome {
+        if dismissingChrome, showChrome {
             withAnimation(.easeOut(duration: 0.18)) { showChrome = false }
         }
     }
