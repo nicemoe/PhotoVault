@@ -295,7 +295,9 @@ struct ReaderView: View {
             HStack(spacing: 0) {
                 toolButton("目录", "list.bullet") { showChapters = true }
                 toolButton("搜索", "magnifyingglass") { showSearch = true }
-                toolButton(isAutoFlipping ? "停止" : (settings.mode == .scroll ? "自动滚动" : "自动翻页"),
+                // 两种模式下都叫「自动」：翻页模式是自动翻页，滚动模式是自动滚动。
+                // 也是两个字，和旁边几个按钮宽度一致。
+                toolButton(isAutoFlipping ? "停止" : "自动",
                            isAutoFlipping ? "pause.circle" : "play.circle",
                            highlighted: isAutoFlipping) {
                     isAutoFlipping.toggle()
