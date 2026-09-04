@@ -155,6 +155,7 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         super.init(frame: frame)
         scrollView.delegate = self
         scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = true
         scrollView.contentInsetAdjustmentBehavior = .never
         addSubview(scrollView)
         scrollView.addSubview(canvas)
@@ -215,6 +216,26 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         blocks = makeBlock(desired.chapter).map { [$0] } ?? []
         restack()
         applyDesired()
+        fillViewport()
+    }
+
+    /// 把后面的章节先接上，直到内容够高。
+    ///
+    /// 不能只靠 scrollViewDidScroll 去接——短章（比如序章）排完还不到一屏，
+    /// UIScrollView 压根滚不动，滚动事件一次都不会来，
+    /// 于是永远接不上下一章，卡在那一章里出不去。
+    private func fillViewport() {
+        var appended = 0
+        while scrollView.contentSize.height < bounds.height * 2.2,
+              let last = blocks.last,
+              last.index + 1 < chapterTitles.count,
+              appended < 20 {
+            guard let next = makeBlock(last.index + 1) else { break }
+            blocks.append(next)
+            restack()
+            appended += 1
+        }
+        if appended > 0 { canvas.setNeedsDisplay() }
     }
 
     private func applyDesired() {
@@ -288,6 +309,7 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
            let next = makeBlock(last.index + 1) {
             blocks.append(next)
             restack()
+            fillViewport()
             trimFromTop()
             canvas.setNeedsDisplay()
             return
@@ -309,13 +331,17 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         }
     }
 
+    /// 丢掉最前面那一章。
+    /// 只丢已经滚过去一屏以上的——短章的时候 fillViewport 会一次接好几章，
+    /// 不加这个判断会把正在读的那章丢掉。
     private func trimFromTop() {
-        guard blocks.count > maxBlocks else { return }
-        let removed = blocks.removeFirst()
+        guard blocks.count > maxBlocks, let first = blocks.first,
+              first.top + first.height < scrollView.contentOffset.y - bounds.height else { return }
+        blocks.removeFirst()
         restack()
         isRestoring = true
         scrollView.setContentOffset(
-            CGPoint(x: 0, y: max(0, scrollView.contentOffset.y - removed.height)), animated: false)
+            CGPoint(x: 0, y: max(0, scrollView.contentOffset.y - first.height)), animated: false)
         isRestoring = false
         positionCanvas()
     }
