@@ -342,6 +342,12 @@ struct ReaderView: View {
         }
         syncScrollText()
         saveProgress()
+
+        // 跳完就把工具栏收起来：用户打开目录/搜索的目的就是换个地方读，
+        // 目的达成之后工具栏只会挡着正文
+        if showChrome {
+            withAnimation(.easeOut(duration: 0.18)) { showChrome = false }
+        }
     }
 
     private func syncScrollText() {
