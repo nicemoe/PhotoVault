@@ -170,13 +170,13 @@ struct BookshelfView: View {
         }
     }
 
-    /// epub 系统没有内置 UTType，用文件扩展名兜底
-    private static var allowedTypes: [UTType] {
-        var types: [UTType] = [.plainText, .text]
-        if let epub = UTType(filenameExtension: "epub") { types.append(epub) }
-        if let epubID = UTType("org.idpf.epub-container") { types.append(epubID) }
-        return types
-    }
+    /// 不按类型过滤。
+    ///
+    /// 小说多半是从浏览器存下来的，很多文件没有声明类型，用
+    /// .plainText / .epub 去过滤的话它们在选取器里是灰的——
+    /// 看得见、点得到，就是打不开。这里全放行，格式由 importBook
+    /// 按扩展名校验，选错了会明确说不支持哪种。
+    private static var allowedTypes: [UTType] { [.item] }
 
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
@@ -185,20 +185,23 @@ struct BookshelfView: View {
         case .success(let urls):
             Task {
                 var ok = 0
-                var lastError: String?
+                var failures: [String] = []
                 for url in urls {
                     do {
                         try await library.importBook(from: url)
                         ok += 1
                     } catch {
-                        lastError = error.localizedDescription
+                        // 带上文件名，一次选多本时才知道是哪本没进来
+                        failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
                     }
                 }
                 if ok > 0 {
                     toastItem = Toast(icon: "books.vertical.fill", text: "已导入 \(ok) 本")
                 }
-                if let lastError, ok < urls.count {
-                    errorMessage = lastError
+                if !failures.isEmpty {
+                    // 选取器刚关掉就弹 alert 有概率被丢掉，等它的退场动画走完
+                    try? await Task.sleep(for: .milliseconds(400))
+                    errorMessage = failures.joined(separator: "\n")
                 }
             }
         }
