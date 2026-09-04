@@ -269,8 +269,6 @@ struct ReaderSettings: Codable, Hashable {
     var theme: ReaderTheme = .paper
     var mode: ReadingMode = .paged
     var pageAnimation: PageAnimation = .curl
-    /// 段首缩进两个字
-    var firstLineIndent: Bool = true
     /// 自动翻页的间隔（秒）
     var autoFlipInterval: Double = 8
     /// 阅读时的屏幕亮度。nil = 跟随系统，不去动它。
@@ -296,7 +294,6 @@ struct ReaderSettings: Codable, Hashable {
         theme = try c.decodeIfPresent(ReaderTheme.self, forKey: .theme) ?? .paper
         mode = try c.decodeIfPresent(ReadingMode.self, forKey: .mode) ?? .paged
         pageAnimation = try c.decodeIfPresent(PageAnimation.self, forKey: .pageAnimation) ?? .curl
-        firstLineIndent = try c.decodeIfPresent(Bool.self, forKey: .firstLineIndent) ?? true
         autoFlipInterval = try c.decodeIfPresent(Double.self, forKey: .autoFlipInterval) ?? 8
         brightness = try c.decodeIfPresent(Double.self, forKey: .brightness)
     }

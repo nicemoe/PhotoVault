@@ -15,9 +15,6 @@ enum ReaderTypesetter {
         // 中文两端对齐更像纸书，但要允许标点压缩，否则会出现大片空隙
         paragraph.alignment = .justified
         paragraph.hyphenationFactor = 0
-        if settings.firstLineIndent {
-            paragraph.firstLineHeadIndent = font.pointSize * 2
-        }
 
         return NSAttributedString(string: text, attributes: [
             .font: font,

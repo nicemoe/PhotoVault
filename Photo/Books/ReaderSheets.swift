@@ -354,12 +354,6 @@ struct ReaderSettingsSheet: View {
                             ), in: ReaderSettings.autoFlipRange, step: 1)
                         }
                     }
-
-                    Toggle("段首缩进两字", isOn: Binding(
-                        get: { library.settings.firstLineIndent },
-                        set: { value in adjust { $0.firstLineIndent = value } }
-                    ))
-                    .font(.system(size: 15, weight: .medium))
                 }
                 .padding(Theme.Metric.margin)
             }
