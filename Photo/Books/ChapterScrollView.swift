@@ -145,6 +145,8 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
     private var isRestoring = false
     private var lastWidth: CGFloat = 0
     private var lastReported = (chapter: -1, offset: -1)
+    /// 想停在哪。宽度还没下来、排不了版的时候也先记着，等能排了再落实。
+    private var desired = (chapter: 0, offset: 0)
 
     /// 最多同时留几章，再多就把离得最远的那头丢掉
     private let maxBlocks = 6
@@ -171,12 +173,12 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         scrollView.frame = bounds
-        guard bounds.width > 1 else { return }
-        if abs(bounds.width - lastWidth) > 0.5 {
-            lastWidth = bounds.width
-            let keep = currentPosition()
-            rebuild(chapter: keep.chapter, offset: keep.offset)
-        }
+        guard bounds.width > 1, abs(bounds.width - lastWidth) > 0.5 else { return }
+        lastWidth = bounds.width
+        // 必须照 desired 排。这里不能问 currentPosition()——
+        // 首次布局时 blocks 还是空的，它只会答「第 0 章第 0 字」，
+        // 把外面要求跳转的位置吃掉。
+        reflow()
     }
 
     // MARK: 排版
@@ -201,12 +203,30 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
                                                       width: textWidth))
     }
 
-    /// 从某一章某个位置重新开始。字号、主题、宽度变了都要调。
+    /// 跳到某一章的某个字符。此刻排不了版也没关系，位置先记下。
     func rebuild(chapter: Int, offset: Int) {
-        guard bounds.width > 1, source != nil else { return }
-        blocks = makeBlock(chapter).map { [$0] } ?? []
+        desired = (chapter, offset)
+        reflow()
+    }
+
+    /// 照 desired 重新排版。宽度、字号、主题变了都走这里，位置不会丢。
+    func reflow() {
+        guard bounds.width > 1, source != nil, !chapterTitles.isEmpty else { return }
+        blocks = makeBlock(desired.chapter).map { [$0] } ?? []
         restack()
-        scroll(to: chapter, offset: offset)
+        applyDesired()
+    }
+
+    private func applyDesired() {
+        guard let block = blocks.first(where: { $0.index == desired.chapter }) else { return }
+        isRestoring = true
+        let y = block.top + block.bodyTop + block.body.y(forCharacterOffset: desired.offset)
+        let maxY = max(0, scrollView.contentSize.height - bounds.height)
+        scrollView.setContentOffset(CGPoint(x: 0, y: min(max(0, y), maxY)), animated: false)
+        isRestoring = false
+        positionCanvas()
+        canvas.setNeedsDisplay()
+        report()
     }
 
     /// 重新计算每章的 top 和内容高度
@@ -231,21 +251,6 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
         return (block.index, block.body.characterOffset(atY: max(0, local)))
     }
 
-    func scroll(to chapter: Int, offset: Int) {
-        guard let block = blocks.first(where: { $0.index == chapter }) else {
-            rebuild(chapter: chapter, offset: offset)
-            return
-        }
-        isRestoring = true
-        let y = block.top + block.bodyTop + block.body.y(forCharacterOffset: offset)
-        let maxY = max(0, scrollView.contentSize.height - bounds.height)
-        scrollView.setContentOffset(CGPoint(x: 0, y: min(max(0, y), maxY)), animated: false)
-        isRestoring = false
-        positionCanvas()
-        canvas.setNeedsDisplay()
-        report()
-    }
-
     // MARK: 滚动
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -264,9 +269,11 @@ final class ChapterScrollContainer: UIView, UIScrollViewDelegate {
     }
 
     private func report() {
+        guard !blocks.isEmpty else { return }
         let pos = currentPosition()
         guard pos.chapter != lastReported.chapter || pos.offset != lastReported.offset else { return }
         lastReported = pos
+        desired = pos          // 用户滚到哪，重排时就回哪
         onPositionChange?(pos.chapter, pos.offset)
     }
 
@@ -379,11 +386,10 @@ struct ChapterScrollReader: UIViewRepresentable {
             return
         }
 
-        // 排版变了（字号/行距/主题/字体）：原地重排，位置不能丢
+        // 排版变了（字号/行距/主题/字体）：原地重排，位置由容器自己守着
         if context.coordinator.appliedRevision != revision {
             context.coordinator.appliedRevision = revision
-            let at = context.coordinator.position
-            view.rebuild(chapter: at.chapter, offset: at.offset)
+            view.reflow()
         }
     }
 
@@ -395,7 +401,6 @@ struct ChapterScrollReader: UIViewRepresentable {
         view.chromeVisible = chromeVisible
         view.onToggleChrome = onToggleChrome
         view.onPositionChange = { chapter, offset in
-            // 也记在 coordinator 里，重排时才知道该回到哪
             coordinator.position = (chapter, offset)
             onPositionChange(chapter, offset)
         }

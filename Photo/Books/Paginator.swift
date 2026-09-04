@@ -30,15 +30,25 @@ enum Paginator {
 
     /// 返回每一页在字符串里的范围
     static func pageRanges(for attributed: NSAttributedString, size: CGSize) -> [NSRange] {
-        guard attributed.length > 0, size.width > 1, size.height > 1 else { return [] }
+        let ranges = pageRanges(for: attributed, size: size, from: 0, upTo: attributed.length)
+        return ranges.isEmpty ? [NSRange(location: 0, length: attributed.length)] : ranges
+    }
+
+    /// 从 start 开始往后切页，切到 limit（不含）为止。
+    /// 滚动切回翻页时用它把「当前这一行」变成新的页首。
+    static func pageRanges(for attributed: NSAttributedString, size: CGSize,
+                           from start: Int, upTo limit: Int) -> [NSRange] {
+        let end = min(limit, attributed.length)
+        guard attributed.length > 0, size.width > 1, size.height > 1,
+              start >= 0, start < end else { return [] }
 
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
         let path = CGPath(rect: CGRect(origin: .zero, size: size), transform: nil)
 
         var ranges: [NSRange] = []
-        var location = 0
+        var location = start
 
-        while location < attributed.length {
+        while location < end {
             let frame = CTFramesetterCreateFrame(framesetter,
                                                  CFRange(location: location, length: 0),
                                                  path, nil)
@@ -46,11 +56,12 @@ enum Paginator {
             // 一个字都放不下（比如容器太窄）就停下，避免死循环
             guard visible.length > 0 else { break }
 
-            ranges.append(NSRange(location: location, length: visible.length))
-            location += visible.length
+            let length = min(visible.length, end - location)
+            ranges.append(NSRange(location: location, length: length))
+            location += length
         }
 
-        return ranges.isEmpty ? [NSRange(location: 0, length: attributed.length)] : ranges
+        return ranges
     }
 
     /// 字符偏移落在第几页——恢复进度时用

@@ -21,6 +21,10 @@ struct ReaderView: View {
     @State private var scrollCharacterOffset = 0
     /// 要求滚动容器跳到某处。token 让「跳到同一处」也能再触发一次。
     @State private var scrollJump = ScrollJump(chapter: 0, offset: 0, token: 0)
+    /// 从滚动切回翻页时，要顶成页首的那个字符。
+    /// 不能在切换那一刻就用掉——紧接着的 rebuildSource 会清掉分页缓存，
+    /// 刚排好的锚点分页会被冲掉。留到重排之后再落实。
+    @State private var pendingAnchor: Int?
 
     @State private var showChrome = false
     @State private var showChapters = false
@@ -69,9 +73,9 @@ struct ReaderView: View {
                 isAutoFlipping = false   // 滚动模式没有「页」可翻
                 requestScroll(chapter: locator.chapter,
                               offset: pageSource?.characterOffset(of: locator) ?? 0)
-            } else if let source = pageSource {
-                // 从滚动切回来：按滚动到的字符定位到对应的页
-                locator = source.locator(chapter: locator.chapter, offset: scrollCharacterOffset)
+            } else {
+                // 从滚动切回来：把当前这一行顶成页首，落到 rebuildSource 里做
+                pendingAnchor = scrollCharacterOffset
             }
         }
         // 自动翻页：isAutoFlipping 变 false 时 task 自动取消
@@ -412,9 +416,10 @@ struct ReaderView: View {
         guard contentSize.width > 1, contentSize.height > 1 else { return }
 
         // 滚动模式的位置在 scrollCharacterOffset 里，locator.page 恒为 0，问它只会拿到章首
-        let offset = settings.mode == .scroll
-            ? scrollCharacterOffset
-            : (pageSource?.characterOffset(of: locator) ?? book.progress.characterOffset)
+        let offset = pendingAnchor
+            ?? (settings.mode == .scroll
+                ? scrollCharacterOffset
+                : (pageSource?.characterOffset(of: locator) ?? book.progress.characterOffset))
         let color = UIColor(theme.text)
 
         if let existing = pageSource {
@@ -426,6 +431,11 @@ struct ReaderView: View {
                                     settings: settings,
                                     textColor: color,
                                     pageSize: contentSize)
+        }
+        // 分页缓存这时已经清干净了，锚点必须在这之后才排
+        if let anchor = pendingAnchor {
+            pageSource?.anchor(chapter: locator.chapter, at: anchor)
+            pendingAnchor = nil
         }
         locator = pageSource?.locator(chapter: locator.chapter, offset: offset) ?? locator
         styleRevision &+= 1

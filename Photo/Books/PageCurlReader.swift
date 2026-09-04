@@ -73,6 +73,20 @@ final class PageSource {
 
     func pageCount(_ chapter: Int) -> Int { pages(chapter).count }
 
+    /// 以某个字符为页首重排本章。
+    ///
+    /// 从滚动切回翻页时用：页边界本来是从章首固定切好的，
+    /// 你正看的那一行多半在某页中部，直接落过去等于往回跳了半页。
+    /// 把它顶成新的一页第一行，切换才是无损的。
+    func anchor(chapter: Int, at offset: Int) {
+        let full = attributed(chapter)
+        guard offset > 0, offset < full.length else { return }
+        let head = Paginator.pageRanges(for: full, size: pageSize, from: 0, upTo: offset)
+        let tail = Paginator.pageRanges(for: full, size: pageSize, from: offset, upTo: full.length)
+        guard !tail.isEmpty else { return }
+        pagesCache[chapter] = head + tail
+    }
+
     func attributed(at locator: PageLocator) -> NSAttributedString? {
         let ranges = pages(locator.chapter)
         guard ranges.indices.contains(locator.page) else { return nil }
