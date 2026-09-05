@@ -1,17 +1,23 @@
 import SwiftUI
-import UniformTypeIdentifiers
+
+/// 书架上会弹的两张卡片。用一个 .sheet(item:) 统一管，
+/// 比在同一个视图上挂两个 .sheet(isPresented:) 稳。
+private enum ShelfSheet: String, Identifiable {
+    case wifi
+    case importer
+    var id: String { rawValue }
+}
 
 struct BookshelfView: View {
 
     @Environment(BookLibrary.self) private var library
     @Environment(WiFiService.self) private var wifi
 
-    @State private var showImporter = false
+    @State private var sheet: ShelfSheet?
     @State private var openedBook: OpenedBook?
     @State private var renaming: Book?
     @State private var renameText = ""
     @State private var deleting: Book?
-    @State private var showWiFi = false
     @State private var errorMessage: String?
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
@@ -43,7 +49,7 @@ struct BookshelfView: View {
                             message: "支持 TXT 和 EPUB。\n可以从「文件」导入，也可以用 WiFi 上传。",
                             actionTitle: "从文件导入"
                         ) {
-                            showImporter = true
+                            sheet = .importer
                         }
                         .padding(.top, 40)
                     } else if visibleBooks.isEmpty {
@@ -90,7 +96,7 @@ struct BookshelfView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     if wifi.isRunning {
                         Button {
-                            showWiFi = true
+                            sheet = .wifi
                         } label: {
                             HStack(spacing: 5) {
                                 Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
@@ -123,12 +129,19 @@ struct BookshelfView: View {
         .fullScreenCover(item: $openedBook) { opened in
             ReaderView(bookID: opened.id)
         }
-        .fileImporter(isPresented: $showImporter,
-                      allowedContentTypes: Self.allowedTypes,
-                      allowsMultipleSelection: true) { result in
-            handleImport(result)
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .wifi:
+                WiFiTransferView()
+            case .importer:
+                DocumentPicker { urls in
+                    handleImport(urls)
+                } onFinish: {
+                    sheet = nil
+                }
+                .ignoresSafeArea()
+            }
         }
-        .sheet(isPresented: $showWiFi) { WiFiTransferView() }
         .alert("重命名", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("书名", text: $renameText)
             Button("取消", role: .cancel) { renaming = nil }
@@ -164,7 +177,7 @@ struct BookshelfView: View {
     private var addMenu: some View {
         Menu {
             Button {
-                showImporter = true
+                sheet = .importer
             } label: {
                 Label("从文件导入", systemImage: "folder")
             }
@@ -172,13 +185,13 @@ struct BookshelfView: View {
             Divider()
 
             Button {
-                showWiFi = true
+                sheet = .wifi
             } label: {
                 Label("WiFi 上传", systemImage: "wifi")
             }
         } label: {
-            // 加号用 light：默认字重的一横一竖比旁边的三条杠粗一圈，摆一起不齐
-            Image(systemName: "plus").circleIcon(glyph: 17, weight: .light)
+            // 加号比默认细一档：那一横一竖比旁边的三条杠粗，摆一起不齐
+            Image(systemName: "plus").circleIcon(weight: .medium)
         }
     }
 
@@ -222,39 +235,27 @@ struct BookshelfView: View {
         }
     }
 
-    /// 不按类型过滤。
-    ///
-    /// 小说多半是从浏览器存下来的，很多文件没有声明类型，用
-    /// .plainText / .epub 去过滤的话它们在选取器里是灰的——
-    /// 看得见、点得到，就是打不开。这里全放行，格式由 importBook
-    /// 按扩展名校验，选错了会明确说不支持哪种。
-    private static var allowedTypes: [UTType] { [.item] }
-
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-        case .success(let urls):
-            Task {
-                var ok = 0
-                var failures: [String] = []
-                for url in urls {
-                    do {
-                        try await library.importBook(from: url)
-                        ok += 1
-                    } catch {
-                        // 带上文件名，一次选多本时才知道是哪本没进来
-                        failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
-                    }
+    private func handleImport(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task {
+            var ok = 0
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    try await library.importBook(from: url)
+                    ok += 1
+                } catch {
+                    // 带上文件名，一次选多本时才知道是哪本没进来
+                    failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
                 }
-                if ok > 0 {
-                    toastItem = Toast(icon: "books.vertical.fill", text: "已导入 \(ok) 本")
-                }
-                if !failures.isEmpty {
-                    // 选取器刚关掉就弹 alert 有概率被丢掉，等它的退场动画走完
-                    try? await Task.sleep(for: .milliseconds(400))
-                    errorMessage = failures.joined(separator: "\n")
-                }
+            }
+            if ok > 0 {
+                toastItem = Toast(icon: "books.vertical.fill", text: "已导入 \(ok) 本")
+            }
+            if !failures.isEmpty {
+                // 选取器刚关掉就弹 alert 有概率被丢掉，等它的退场动画走完
+                try? await Task.sleep(for: .milliseconds(400))
+                errorMessage = failures.joined(separator: "\n")
             }
         }
     }
