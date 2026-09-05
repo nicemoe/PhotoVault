@@ -206,6 +206,30 @@ struct VideoPage: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
 
+                // 手势单独一层，压在控件下面。
+                //
+                // 挂在最外层容器上的话，控件就成了它的子视图：SwiftUI 得先等
+                // 双击超时（约 300ms）确认你不会再点第二下，DragGesture 也要
+                // 先判定失败，才敢把点击派发下去——按一下暂停要等半秒才动。
+                // 分层之后，按钮的点击直接命中按钮，手势只管画面上的空白处。
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(magnifyGesture, including: locked ? .subviews : .all)
+                    // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
+                    // 免得和相册翻页抢
+                    .gesture(dragGesture(size: geo.size, landscape: landscape),
+                             including: locked ? .subviews : ((scale > 1.01 || landscape) ? .all : .subviews))
+                    // 双击必须写在单击前面，否则单击会先把手势吃掉
+                    .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                        guard !locked else { return }
+                        handleDoubleTap(at: location, width: geo.size.width)
+                    }
+                    .onTapGesture {
+                        // 锁住时单击只负责把解锁键叫出来，不去开合整套工具栏
+                        guard !locked else { return }
+                        onSingleTap()
+                    }
+
                 if unplayable {
                     unplayableNote
                 } else if chromeVisible {
@@ -225,22 +249,6 @@ struct VideoPage: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .contentShape(Rectangle())
-            .gesture(magnifyGesture, including: locked ? .subviews : .all)
-            // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
-            // 免得和相册翻页抢
-            .gesture(dragGesture(size: geo.size, landscape: landscape),
-                     including: locked ? .subviews : ((scale > 1.01 || landscape) ? .all : .subviews))
-            // 双击必须写在单击前面，否则单击会先把手势吃掉
-            .onTapGesture(count: 2, coordinateSpace: .local) { location in
-                guard !locked else { return }
-                handleDoubleTap(at: location, width: geo.size.width)
-            }
-            .onTapGesture {
-                // 锁住时单击只负责把解锁键叫出来，不去开合整套工具栏
-                guard !locked else { return }
-                onSingleTap()
-            }
         }
         // 必须在这一层再声明一次全屏铺满。
         //
