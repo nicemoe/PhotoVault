@@ -90,7 +90,7 @@ struct RootView: View {
             .background(Theme.background)
             .scrollIndicators(.hidden)
             .readingWidth($screenWidth)
-            .navigationTitle("相册")
+            .navigationTitle("媒体")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {

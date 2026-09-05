@@ -9,7 +9,8 @@ struct MainTabView: View {
     var body: some View {
         TabView {
             RootView()
-                .tabItem { Label("相册", systemImage: "photo.on.rectangle.angled") }
+                // 叫「媒体」不叫「相册」：以后这里还要放视频
+                .tabItem { Label("媒体", systemImage: "photo.on.rectangle.angled") }
 
             BookshelfView()
                 .tabItem { Label("书架", systemImage: "books.vertical") }
