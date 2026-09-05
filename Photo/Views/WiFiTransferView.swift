@@ -63,7 +63,7 @@ struct WiFiTransferView: View {
                         .multilineTextAlignment(.center)
                         .lineSpacing(2)
                 }
-                actionIcon("play.fill", tint: Theme.accent, label: "开启 WiFi 上传") {
+                actionIcon("power", tint: Theme.accent, filled: true, label: "开启 WiFi 上传") {
                     Task { await wifi.start() }
                 }
 
@@ -114,7 +114,7 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                 }
 
-                actionIcon("stop.fill", tint: Theme.danger, label: "停止服务") {
+                actionIcon("power", tint: Theme.danger, label: "停止服务") {
                     wifi.stop()
                 }
 
@@ -129,7 +129,7 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                         .multilineTextAlignment(.center)
                 }
-                actionIcon("arrow.clockwise", tint: Theme.accent, label: "重试") {
+                actionIcon("arrow.clockwise", tint: Theme.accent, filled: true, label: "重试") {
                     Task { await wifi.start() }
                 }
             }
@@ -141,16 +141,19 @@ struct WiFiTransferView: View {
 
     /// 卡片里的动作按钮：只有图标，不做成带文案的方块。
     /// 上面的标题和说明已经把要干什么讲清楚了。
-    private func actionIcon(_ name: String, tint: Color, label: String,
-                            action: @escaping () -> Void) -> some View {
+    ///
+    /// 用电源符号而不是播放三角：▶ 的意思是「播放媒体」，用来表示
+    /// 「启动服务」对不上；而且三角形的视觉重心偏左，摆进圆里天生看着不居中。
+    /// filled 用于主操作，实心圆更像个可以按下去的东西。
+    private func actionIcon(_ name: String, tint: Color, filled: Bool = false,
+                            label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name)
-                .font(.system(size: 21, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 56, height: 56)
-                // 卡片里只有一个孤零零的图标会显得没分量，加个浅色圆底
-                // 把它托住；导航栏那种一排图标才不需要圆底。
-                .background(tint.opacity(0.12), in: Circle())
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(filled ? Color.white : tint)
+                .frame(width: 58, height: 58)
+                .background(filled ? AnyShapeStyle(tint) : AnyShapeStyle(tint.opacity(0.12)),
+                            in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
