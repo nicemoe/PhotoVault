@@ -26,6 +26,18 @@ final class PlayerHostView: UIView {
         set { playerLayer.player = newValue }
     }
 
+    /// 是否允许外层相册左右翻页。
+    ///
+    /// 横屏快进要横向拖，而 TabView 的翻页是它内部那个 UIScrollView 在做。
+    /// SwiftUI 的手势优先级管不到祖先视图的 UIKit 手势——用
+    /// simultaneousGesture 就是两个一起响应，画面会跟着横移；
+    /// 用 highPriorityGesture 也只压得住子视图。只能直接把它关掉。
+    var pagingEnabled = true {
+        didSet { pager?.isScrollEnabled = pagingEnabled }
+    }
+
+    private weak var pager: UIScrollView?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         playerLayer.videoGravity = .resizeAspect
@@ -33,19 +45,47 @@ final class PlayerHostView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        var view: UIView? = superview
+        while let current = view {
+            if let scroll = current as? UIScrollView { pager = scroll; break }
+            view = current.superview
+        }
+        pager?.isScrollEnabled = pagingEnabled
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        // 离场时一定要还回去，否则整个相册都翻不动了
+        if newWindow == nil { pager?.isScrollEnabled = true }
+    }
+
+    deinit {
+        // deinit 可能不在主线程；捕获引用后回主线程还原
+        if let pager {
+            Task { @MainActor in pager.isScrollEnabled = true }
+        }
+    }
 }
 
 struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer?
+    /// false 表示这一页要独占横向手势（横屏快进）
+    var pagingEnabled = true
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.player = player
+        view.pagingEnabled = pagingEnabled
         return view
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
         if view.player !== player { view.player = player }
+        if view.pagingEnabled != pagingEnabled { view.pagingEnabled = pagingEnabled }
     }
 }
 
@@ -104,7 +144,10 @@ struct VideoPage: View {
                     // 探测的，和播放层实际显示的比例只要差一点（像素宽高比、旋转矩阵），
                     // 播放层就会在这个框里再 fit 一次——两层 fit 叠加，左右会多出一圈
                     // 永远消不掉的黑边。页面本来就是黑底，它自己留的黑边看不出来。
-                    PlayerLayerView(player: player)
+                    // 横屏（全屏播放）和放大后都由本页独占横向手势，
+                    // 竖屏没放大时把左右滑还给相册翻页
+                    PlayerLayerView(player: player,
+                                    pagingEnabled: !(landscape || scale > 1.01))
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(scale)
                         .offset(offset)
@@ -136,14 +179,22 @@ struct VideoPage: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(magnifyGesture)
-            .simultaneousGesture(dragGesture(size: geo.size, landscape: landscape),
-                                 including: (scale > 1.01 || landscape) ? .all : .subviews)
+            // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
+            // 免得和相册翻页抢
+            .gesture(dragGesture(size: geo.size, landscape: landscape),
+                     including: (scale > 1.01 || landscape) ? .all : .subviews)
             // 双击必须写在单击前面，否则单击会先把手势吃掉
             .onTapGesture(count: 2, coordinateSpace: .local) { location in
                 handleDoubleTap(at: location, width: geo.size.width)
             }
             .onTapGesture { onSingleTap() }
         }
+        // 必须在这一层再声明一次全屏铺满。
+        //
+        // TabView 的 .page 样式不会把外面那句 ignoresSafeArea 传给页面内容，
+        // GeometryReader 拿到的是扣掉安全区之后的尺寸。容器一变矮，
+        // 9:16 的视频就从「按宽度铺满」翻成「按高度铺满」，左右于是多出黑边。
+        .ignoresSafeArea()
         .onChange(of: isCurrent, initial: true) { _, current in
             if current { start() } else { stop() }
         }
