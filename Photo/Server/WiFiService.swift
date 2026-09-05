@@ -272,6 +272,13 @@ final class WiFiService {
         ]
         if includeAssets {
             json["groupId"] = store.groupID(containing: folder.id)?.uuidString ?? ""
+            // 子目录和从分组根到这里的路径，网页要靠它们画目录树和面包屑
+            json["subfolders"] = store.children(of: folder.id)
+                .sorted(by: store.folderSort)
+                .map { folderJSON($0, includeAssets: false) }
+            json["path"] = store.path(to: folder.id).dropLast().map {
+                ["id": $0.id.uuidString, "name": $0.name]
+            }
             json["assets"] = folder.assets.reversed().map { asset in
                 [
                     "id": asset.id.uuidString,

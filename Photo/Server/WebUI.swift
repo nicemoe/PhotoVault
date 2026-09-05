@@ -271,8 +271,11 @@ function renderCrumbs(){
   }else if(view.level === 'folders'){
     html = `<button onclick="go('groups')">全部分组</button><span class="sep">/</span><span class="cur">${esc(g ? g.name : '')}</span>`;
   }else{
+    // 目录可以嵌套，中间每一层都要能点回去
+    const chain = (folderCache && folderCache.path) || [];
     html = `<button onclick="go('groups')">全部分组</button><span class="sep">/</span>`
          + `<button onclick="go('folders','${view.groupId}')">${esc(g ? g.name : '')}</button>`
+         + chain.map(n => `<span class="sep">/</span><button onclick="go('photos','${view.groupId}','${n.id}')">${esc(n.name)}</button>`).join('')
          + `<span class="sep">/</span><span class="cur">${esc(folderCache ? folderCache.name : '')}</span>`;
   }
   $('#crumbs').innerHTML = html;
@@ -289,7 +292,9 @@ function renderToolbar(){
     // 放在这里既和当前上下文无关，也会让层级看着混乱。
     html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`;
   }else{
-    html = `<button class="btn primary" onclick="filePick()">${plus}选择图片上传</button>`;
+    // 目录里既能传图，也能再建子目录
+    html = `<button class="btn primary" onclick="filePick()">${plus}选择图片上传</button>`
+         + `<button class="btn" onclick="promptCreateFolder()">${plus}新建子目录</button>`;
   }
   $('#toolbar').innerHTML = html;
 }
@@ -335,34 +340,28 @@ function render(){
   if(view.level === 'folders'){
     const g = state.groups.find(x => x.id === view.groupId);
     if(!g){ go('groups'); return; }
-    if(!g.folders.length){
-      main.innerHTML = emptyHTML(ICON.folder,'这个分组还没有目录','目录用来分类存放图片');
+    // 只列直接挂在分组下的那层，子目录在各自的父目录里显示
+    const roots = g.folders.filter(f => !f.parentId);
+    if(!roots.length){
+      main.innerHTML = emptyHTML(ICON.folder,'这个分组还没有目录','目录用来分类存放图片，里面还能再建子目录');
       return;
     }
-    main.innerHTML = '<div class="grid">' + g.folders.map(f => `
-      <div class="card" ondragover="cardDragOver(event,this)" ondragleave="cardDragLeave(event,this)" ondrop="cardDrop(event,this,'${f.id}')">
-        <div onclick="go('photos','${g.id}','${f.id}')">${coverHTML(f.cover, null)}</div>
-        <div class="cbody">
-          <div class="cname" onclick="go('photos','${g.id}','${f.id}')">${esc(f.name)}</div>
-          <div class="cmeta">${f.photoCount} 张照片</div>
-          <div class="cactions">
-            <button class="mini" onclick="promptMoveFolder('${f.id}')">移动</button>
-            <button class="mini" onclick="promptRenameFolder('${f.id}','${esc(f.name)}')">重命名</button>
-            <button class="mini danger" onclick="removeFolder('${f.id}')">删除</button>
-          </div>
-        </div>
-      </div>`).join('') + '</div>';
+    main.innerHTML = '<div class="grid">' + roots.map(f => folderCardHTML(g.id, f)).join('') + '</div>';
     return;
   }
 
-  // 照片
+  // 目录内部：先列子目录，再列图片
   const f = folderCache;
   const list = (f && f.assets) || [];
+  const subs = (f && f.subfolders) || [];
+  const gid = (f && f.groupId) || view.groupId;
+
   main.innerHTML = `
+    ${subs.length ? '<div class="grid">' + subs.map(s => folderCardHTML(gid, s)).join('') + '</div>' : ''}
     <div class="drop" id="drop">
       <div class="up">${ICON.upload}</div>
       <h3>把图片拖到这里上传</h3>
-      <p>一次可以拖多张，也可以直接拖一整个文件夹进来</p>
+      <p>一次可以拖多张；拖一整个文件夹进来会按原来的层级建好子目录</p>
       <button class="btn primary" style="display:inline-flex" onclick="filePick()">选择图片</button>
     </div>
     ${list.length ? '<div class="photos">' + list.map(a => `
@@ -370,8 +369,28 @@ function render(){
         <img loading="lazy" src="/thumb?id=${a.id}&s=380" alt="" onclick="openViewer('${a.id}')">
         <span class="del" onclick="removeAsset('${a.id}')">&times;</span>
       </div>`).join('') + '</div>'
-    : emptyHTML(ICON.photo,'这个目录还没有图片','上传后手机 App 里会立刻出现')}
+    : (subs.length ? '' : emptyHTML(ICON.photo,'这个目录还没有图片','上传后手机 App 里会立刻出现'))}
   `;
+}
+
+// 目录卡片：分组内和目录内共用一套
+function folderCardHTML(groupId, f){
+  const meta = f.subfolderCount
+    ? `${f.subfolderCount} 个子目录 · 共 ${f.totalPhotoCount} 张`
+    : `${f.photoCount} 张照片`;
+  return `
+    <div class="card" ondragover="cardDragOver(event,this)" ondragleave="cardDragLeave(event,this)" ondrop="cardDrop(event,this,'${f.id}')">
+      <div onclick="go('photos','${groupId}','${f.id}')">${coverHTML(f.cover, null)}</div>
+      <div class="cbody">
+        <div class="cname" onclick="go('photos','${groupId}','${f.id}')">${esc(f.name)}</div>
+        <div class="cmeta">${meta}</div>
+        <div class="cactions">
+          <button class="mini" onclick="promptMoveFolder('${f.id}')">移动</button>
+          <button class="mini" onclick="promptRenameFolder('${f.id}','${esc(f.name)}')">重命名</button>
+          <button class="mini danger" onclick="removeFolder('${f.id}')">删除</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function emptyHTML(icon, title, msg){
@@ -429,8 +448,12 @@ async function removeGroup(id){
 
 function promptCreateFolder(){
   const gid = view.groupId;
-  inputModal('新建目录', '例如：2025 京都', '', async name => {
-    await api('/api/folder/create', {groupId: gid, name}); toast('目录已创建'); load();
+  // 在某个目录里点新建，建的是它的子目录；在分组页点，建在分组根下
+  const parentId = view.level === 'photos' ? view.folderId : null;
+  inputModal(parentId ? '新建子目录' : '新建目录', '例如：2025 京都', '', async name => {
+    await api('/api/folder/create', {groupId: gid, name, parentId});
+    toast('目录已创建');
+    if(parentId) go('photos', gid, parentId); else load();
   });
 }
 function promptRenameFolder(id, current){
@@ -439,24 +462,41 @@ function promptRenameFolder(id, current){
   });
 }
 async function removeFolder(id){
-  if(!confirm('删除该目录？其中的图片都会被删除。')) return;
+  if(!confirm('删除该目录？里面的子目录和图片都会被一起删除。')) return;
   await api('/api/folder/delete', {id}); toast('已删除'); load();
 }
 
+// 目标可以是任意分组的根，也可以是任意目录。
+// 自己和自己的子树不能选——移进去这棵子树就从树上断开了。
 function promptMoveFolder(id){
-  const currentGroup = view.groupId;
-  $('#modal').innerHTML = `<h3>移动到分组</h3>` + state.groups.map(g => `
-    <button class="pick ${g.id === currentGroup ? 'cur' : ''}" onclick="doMoveFolder('${id}','${g.id}')">
-      <i style="background:${g.color}"></i>
-      <span>${esc(g.name)}</span>
-      <span style="margin-left:auto;color:var(--sub);font-size:12.5px">${g.folderCount} 个目录</span>
-    </button>`).join('')
+  let rows = '';
+  for(const g of state.groups){
+    rows += `<button class="pick" onclick="doMoveFolder('${id}','${g.id}',null)">
+      <i style="background:${g.color}"></i><span>${esc(g.name)}</span>
+      <span style="margin-left:auto;color:var(--sub);font-size:12.5px">分组根</span>
+    </button>`;
+
+    const walk = (parentId, depth) => {
+      for(const f of g.folders.filter(x => (x.parentId || null) === parentId)){
+        const self = f.id === id;
+        rows += `<button class="pick${self ? ' cur' : ''}" ${self ? '' : `onclick="doMoveFolder('${id}','${g.id}','${f.id}')"`}>
+          <span style="width:${depth * 16}px"></span>
+          <span>${esc(f.name)}</span>
+          <span style="margin-left:auto;color:var(--sub);font-size:12.5px">${self ? '自身' : f.totalPhotoCount + ' 张'}</span>
+        </button>`;
+        // 自己的子树全都不能选，展开只是噪音
+        if(!self) walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 1);
+  }
+  $('#modal').innerHTML = `<h3>移动到</h3>` + rows
     + `<div class="mrow"><button class="btn" onclick="closeModal()">取消</button></div>`;
   $('#mask').classList.add('on');
 }
-async function doMoveFolder(id, groupId){
+async function doMoveFolder(id, groupId, parentId){
   closeModal();
-  await api('/api/folder/move', {id, groupId});
+  await api('/api/folder/move', {id, groupId, parentId: parentId || null});
   toast('已移动');
   load();
 }
