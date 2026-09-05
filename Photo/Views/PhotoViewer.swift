@@ -19,6 +19,9 @@ struct PhotoViewer: View {
     @State private var showDeleteConfirm = false
     @State private var isPlaying = false
     @State private var isLandscape = false
+    /// 横竖屏切换会把播放页整个重建，用这两个把进度接上
+    @State private var resumeAsset: UUID?
+    @State private var resumeTime: Double = 0
 
     init(assets: [Asset], startIndex: Int, folderID: UUID) {
         self.assets = assets
@@ -57,32 +60,36 @@ struct PhotoViewer: View {
         ZStack {
             (onDarkSurface ? Color.black : Theme.viewerBackground).ignoresSafeArea()
 
-            TabView(selection: $currentID) {
-                ForEach(live) { asset in
-                    // 单击切换工具栏的手势挂在图片上，不能挂在外层 ZStack：
-                    // 挂外层会盖住上下两条栏，把分享、删除这些按钮的点击吞掉。
-                    Group {
-                        if asset.isVideo {
-                            // 只给当前这一页装播放器：TabView 会预建左右相邻页，
-                            // 每页都挂一个 AVPlayer 的话会同时开好几路解码
-                            VideoPage(asset: asset,
-                                      isCurrent: asset.id == currentID,
-                                      chromeVisible: showChrome,
-                                      onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } },
-                                      onClose: { dismiss() },
-                                      onPrevious: neighbour(of: asset, in: live, step: -1),
-                                      onNext: neighbour(of: asset, in: live, step: 1))
-                        } else {
-                            ZoomableImage(asset: asset) {
-                                withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+            if isLandscapeVideo, let asset = current, asset.isVideo {
+                // 横屏走全屏播放，不套 TabView。
+                //
+                // TabView 的分页容器不会把 ignoresSafeArea 传给页面内容，
+                // 在页面里再声明也压不住外面那层，画面上下就铺不满。
+                // 顺带也没有翻页手势来抢横向拖动了。
+                videoPage(for: asset, in: live)
+                    .ignoresSafeArea()
+            } else {
+                TabView(selection: $currentID) {
+                    ForEach(live) { asset in
+                        // 单击切换工具栏的手势挂在图片上，不能挂在外层 ZStack：
+                        // 挂外层会盖住上下两条栏，把分享、删除这些按钮的点击吞掉。
+                        Group {
+                            if asset.isVideo {
+                                // 只给当前这一页装播放器：TabView 会预建左右相邻页，
+                                // 每页都挂一个 AVPlayer 的话会同时开好几路解码
+                                videoPage(for: asset, in: live)
+                            } else {
+                                ZoomableImage(asset: asset) {
+                                    withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+                                }
                             }
                         }
+                        .tag(Optional(asset.id))
                     }
-                    .tag(Optional(asset.id))
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea()
 
             // 横屏看视频时不再显示上下两条栏：那是全屏播放的姿势，
             // 播放控件由视频页自己出，两套栏叠在一起会互相压住
@@ -200,6 +207,22 @@ struct PhotoViewer: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    private func videoPage(for asset: Asset, in live: [Asset]) -> some View {
+        VideoPage(asset: asset,
+                  isCurrent: asset.id == currentID,
+                  chromeVisible: showChrome,
+                  onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } },
+                  onClose: { dismiss() },
+                  onPrevious: neighbour(of: asset, in: live, step: -1),
+                  onNext: neighbour(of: asset, in: live, step: 1),
+                  // 横竖屏切换时这个视图会重建，用它把进度接上
+                  startAt: resumeAsset == asset.id ? resumeTime : 0,
+                  onLeave: { time in
+                      resumeAsset = asset.id
+                      resumeTime = time
+                  })
     }
 
     /// 相邻的那一个。到头了返回 nil，播放器把按钮置灰。

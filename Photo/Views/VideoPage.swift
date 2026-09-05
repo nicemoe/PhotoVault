@@ -118,6 +118,10 @@ struct VideoPage: View {
     /// 上一个/下一个媒体。到头了传 nil，按钮变灰。
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
+    /// 从这个位置接着播。横竖屏切换时视图会重建，靠它接上进度。
+    var startAt: Double = 0
+    /// 视图要走了，把当前进度交出去
+    var onLeave: ((Double) -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -125,6 +129,7 @@ struct VideoPage: View {
     @State private var duration: Double = 0
     @State private var scrubbing = false
     @State private var observer: Any?
+    @State private var endObserver: NSObjectProtocol?
     @State private var rate: Float = 1
 
     // 缩放，和图片那边一套参数
@@ -515,6 +520,23 @@ struct VideoPage: View {
             }
         }
 
+        // 播完要把按钮切回「播放」。光靠进度回调判断不可靠：
+        // 最后一帧的时间戳未必正好等于时长，会一直显示成暂停。
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                isPlaying = false
+                if duration > 0 { current = duration }
+            }
+        }
+
+        // 横竖屏切换会重建这个视图，从上次的位置接着播，别退回开头
+        if startAt > 0.5 {
+            current = startAt
+            made.seek(to: CMTime(seconds: startAt, preferredTimescale: 600))
+        }
+
         made.play()
         made.rate = rate
         isPlaying = true
@@ -523,6 +545,10 @@ struct VideoPage: View {
     private func stop() {
         if let observer { player?.removeTimeObserver(observer) }
         observer = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        // 交出进度必须赶在把 current 清零之前
+        if current > 0.5 { onLeave?(current) }
         player?.pause()
         player = nil
         isPlaying = false

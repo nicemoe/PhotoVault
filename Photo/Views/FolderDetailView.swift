@@ -334,7 +334,10 @@ struct FolderDetailView: View {
             }
         } label: {
             AssetImage(asset: asset, maxPixel: 420)
-                .frame(width: layout.side, height: layout.side)
+                // 尺寸跟着列宽走，不用量出来的 side ——
+                // 测量值一过时就会把整片格子挤出屏幕
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
                 .overlay {
                     if isSelecting {

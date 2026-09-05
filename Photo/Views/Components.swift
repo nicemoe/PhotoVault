@@ -41,27 +41,32 @@ enum ScreenMetrics {
     }
 }
 
-/// 由容器宽度推出卡片网格的列数与边长
+/// 由容器宽度推出卡片网格的列数。
+///
+/// 列宽用 .flexible 而不是 .fixed —— 这是关键。
+/// 用 .fixed 的话，列宽是拿「量到的容器宽度」算出来的一个死数；测量值只要
+/// 一过时（转屏、分屏、任何让容器变宽又变窄的操作），网格就会按旧宽度排，
+/// 内容整片挤出屏幕。.flexible 让每列自己填满实际容器，列数算多算少都只是
+/// 疏密不同，不会错位。
 struct CardGridLayout {
     var columnCount: Int
+    /// 单元格的估算边长，只用来给缩略图挑分辨率，不用来定尺寸
     var side: CGFloat
     var columns: [GridItem]
 
     /// - Parameter preferredItemWidth: 单个卡片的理想宽度，用来决定列数
     init(contentWidth: CGFloat, gap: CGFloat, preferredItemWidth: CGFloat, minimumColumns: Int = 2) {
         let count = max(minimumColumns, Int((contentWidth + gap) / (preferredItemWidth + gap)))
-        let total = contentWidth - gap * CGFloat(count - 1)
-        columnCount = count
-        side = max(1, total / CGFloat(count))
-        columns = Array(repeating: GridItem(.fixed(side), spacing: gap), count: count)
+        self.init(contentWidth: contentWidth, gap: gap, fixedColumns: count)
     }
 
     /// 固定列数（照片墙用）
     init(contentWidth: CGFloat, gap: CGFloat, fixedColumns: Int) {
-        let total = contentWidth - gap * CGFloat(fixedColumns - 1)
-        columnCount = fixedColumns
-        side = max(1, total / CGFloat(fixedColumns))
-        columns = Array(repeating: GridItem(.fixed(side), spacing: gap), count: fixedColumns)
+        let count = max(1, fixedColumns)
+        let total = contentWidth - gap * CGFloat(count - 1)
+        columnCount = count
+        side = max(1, total / CGFloat(count))
+        columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: count)
     }
 }
 
@@ -173,7 +178,8 @@ struct GroupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CoverCollage(assets: group.coverAssets, tint: Theme.color(at: group.colorIndex))
-                .frame(width: side, height: side)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topLeading) {
                     Circle()
@@ -199,10 +205,9 @@ struct GroupCard: View {
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
             }
-            .frame(width: side, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 10)
         }
-        .frame(width: side)
     }
 }
 
@@ -229,7 +234,8 @@ struct FolderCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CoverCollage(assets: store.coverAssets(for: folder.id), tint: tint, emptyIcon: "folder")
-                .frame(width: side, height: side)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topTrailing) {
                     if subfolderCount > 0 {
@@ -251,11 +257,11 @@ struct FolderCard: View {
                 Text(caption)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.secondaryLabel)
+                    .lineLimit(1)
             }
-            .frame(width: side, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 10)
         }
-        .frame(width: side)
     }
 }
 
