@@ -178,13 +178,21 @@ struct PhotoViewer: View {
         .padding(.top, 8)
     }
 
-    /// 从相册导入的拿不到文件名，退回用目录名
+    /// 标题。
+    ///
+    /// 从系统相册导入的拿不到文件名，这时显示加入时间——不能拿目录名顶上，
+    /// 那看着像文件名其实不是，一整个目录里每张都叫同一个名字。
     private func title(for asset: Asset?) -> String {
-        guard let asset, !asset.originalName.isEmpty else {
-            return store.folder(folderID)?.name ?? ""
-        }
-        return asset.originalName
+        guard let asset else { return "" }
+        if !asset.originalName.isEmpty { return asset.originalName }
+        return Self.dateText.string(from: asset.createdAt)
     }
+
+    private static let dateText: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy年M月d日 HH:mm"
+        return f
+    }()
 
     private func videoPage(for asset: Asset, in live: [Asset]) -> some View {
         VideoPage(asset: asset,
@@ -194,10 +202,7 @@ struct PhotoViewer: View {
                   onClose: { dismiss() },
                   onPrevious: neighbour(of: asset, in: live, step: -1),
                   onNext: neighbour(of: asset, in: live, step: 1),
-                  // 从相册选的视频拿不到文件名，退回用目录名
-                  title: asset.originalName.isEmpty
-                       ? (store.folder(folderID)?.name ?? "")
-                       : asset.originalName,
+                  title: title(for: asset),
                   // 横竖屏切换时这个视图会重建，用它把进度接上
                   startAt: resumeAsset == asset.id ? resumeTime : 0,
                   onLeave: { time in

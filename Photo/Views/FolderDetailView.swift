@@ -430,8 +430,15 @@ struct FolderDetailView: View {
 
             Spacer()
 
-            selectionAction("arrow.right.square", tint: Theme.accent) { showMoveSheet = true }
-            selectionAction("trash", tint: Theme.danger) { showDeleteConfirm = true }
+            // 两个字形的「实心程度」差很多：arrow.right.square 是个填满的方块，
+            // trash 又瘦又高。缩进同一个方框的话方块看着明显大一圈，
+            // 所以按视觉重量各给各的尺寸。
+            selectionAction("arrow.right.square", size: 18.5, tint: Theme.accent) {
+                showMoveSheet = true
+            }
+            selectionAction("trash", size: 21.5, tint: Theme.danger) {
+                showDeleteConfirm = true
+            }
         }
         .padding(.horizontal, Theme.Metric.margin)
         .padding(.vertical, 10)
@@ -441,16 +448,16 @@ struct FolderDetailView: View {
         }
     }
 
-    private func selectionAction(_ icon: String, tint: Color,
+    private func selectionAction(_ icon: String, size: CGFloat, tint: Color,
                                  action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 // 必须 resizable + scaledToFit：直接用 font 渲染的话，
                 // 两个字形在各自 line box 里的高低不同，居中的是 line box
-                // 不是字形本身，看着就上下错开。缩放到同一个方框就对齐了。
+                // 不是字形本身，看着就上下错开。缩放到方框里就对齐了。
                 .resizable()
                 .scaledToFit()
-                .frame(width: 19, height: 19)
+                .frame(width: size, height: size)
                 .foregroundStyle(tint)
                 .frame(width: 44, height: 40)
                 .contentShape(Rectangle())
