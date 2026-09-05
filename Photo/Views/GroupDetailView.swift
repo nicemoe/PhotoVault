@@ -35,11 +35,12 @@ struct GroupDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header(group)
 
-                    if group.folders.isEmpty {
+                    // 只列直接挂在分组下的那层；子目录在各自的父目录里显示
+                    if group.rootFolders.isEmpty {
                         EmptyState(
                             icon: "folder.badge.plus",
                             title: "还没有目录",
-                            message: "目录用来存放照片，\n可以按主题或时间来分。",
+                            message: "目录用来存放照片，\n里面还可以再建子目录。",
                             actionTitle: "新建目录"
                         ) {
                             newFolderName = ""
@@ -48,7 +49,7 @@ struct GroupDetailView: View {
                         .padding(.top, 20)
                     } else {
                         LazyVGrid(columns: layout.columns, spacing: 20) {
-                            ForEach(group.folders.sorted(by: store.folderSort)) { folder in
+                            ForEach(group.rootFolders.sorted(by: store.folderSort)) { folder in
                                 Button {
                                     path.append(.folder(folder.id))
                                 } label: {
@@ -125,14 +126,19 @@ struct GroupDetailView: View {
             isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }),
             titleVisibility: .visible
         ) {
-            Button("删除目录及其中照片", role: .destructive) {
+            Button("删除目录及其中内容", role: .destructive) {
                 if let f = deletingFolder { store.deleteFolder(f.id) }
                 deletingFolder = nil
             }
             Button("取消", role: .cancel) { deletingFolder = nil }
         } message: {
             if let f = deletingFolder {
-                Text("将删除 \(f.photoCount) 张照片，操作不可撤销。")
+                // 子目录会跟着一起删，数量必须说清楚，不然用户以为只删了一层
+                let subCount = store.totalFolderCount(in: f.id)
+                let photoCount = store.totalPhotoCount(in: f.id)
+                Text(subCount > 0
+                     ? "将删除 \(subCount) 个子目录、\(photoCount) 张照片，操作不可撤销。"
+                     : "将删除 \(photoCount) 张照片，操作不可撤销。")
             }
         }
         .sheet(item: $movingFolder) { folder in
@@ -182,7 +188,7 @@ struct GroupDetailView: View {
         Button {
             movingFolder = folder
         } label: {
-            Label("移动到其他分组", systemImage: "arrow.right.square")
+            Label("移动到…", systemImage: "arrow.right.square")
         }
 
         Divider()
@@ -195,8 +201,9 @@ struct GroupDetailView: View {
     }
 }
 
-// MARK: - 移动目录到其他分组
+// MARK: - 移动目录
 
+/// 目标可以是任意分组的根，也可以是任意目录。
 struct MoveFolderSheet: View {
 
     let folder: Folder
@@ -206,52 +213,76 @@ struct MoveFolderSheet: View {
     @Environment(LibraryStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
+    /// 列表里的一行：分组根或某个目录
+    private struct Destination: Identifiable {
+        let id: String
+        let groupID: UUID
+        /// nil 表示放在分组根下
+        let folderID: UUID?
+        let name: String
+        let detail: String
+        let depth: Int
+        let colorIndex: Int
+        /// 不能选的原因，nil 表示可选
+        let blocked: String?
+    }
+
+    private var destinations: [Destination] {
+        store.sortedGroups.flatMap { rows(for: $0) }
+    }
+
+    private func rows(for group: PhotoGroup) -> [Destination] {
+        // 自己和自己的子孙都不能当目标：移进去这棵子树就从树上断开了，
+        // parent 链还会成环，界面遍历不到头
+        let forbidden = Set(group.subtree(of: folder.id).map(\.id))
+        let currentParent = folder.parentID
+
+        var out: [Destination] = [
+            Destination(id: "g-\(group.id)",
+                        groupID: group.id,
+                        folderID: nil,
+                        name: group.name,
+                        detail: "\(group.rootFolders.count) 个目录 · \(group.photoCount) 张",
+                        depth: 0,
+                        colorIndex: group.colorIndex,
+                        blocked: (group.id == currentGroupID && currentParent == nil) ? "当前" : nil)
+        ]
+
+        func walk(_ parent: UUID?, depth: Int) {
+            for child in group.folders.filter({ $0.parentID == parent }).sorted(by: store.folderSort) {
+                let isSelf = child.id == folder.id
+                out.append(Destination(id: "f-\(child.id)",
+                                       groupID: group.id,
+                                       folderID: child.id,
+                                       name: child.name,
+                                       detail: "\(store.totalPhotoCount(in: child.id)) 张",
+                                       depth: depth,
+                                       colorIndex: group.colorIndex,
+                                       blocked: isSelf ? "自身"
+                                              : (child.id == currentParent ? "当前" : nil)))
+                // 自己的子树不展开：它们全都不能选，列出来只是噪音
+                if !forbidden.contains(child.id) { walk(child.id, depth: depth + 1) }
+            }
+        }
+        walk(nil, depth: 1)
+        return out
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(store.sortedGroups) { group in
+                VStack(spacing: 8) {
+                    ForEach(destinations) { item in
                         Button {
-                            store.moveFolder(folder.id, toGroup: group.id)
+                            store.moveFolder(folder.id, toGroup: item.groupID, parent: item.folderID)
                             onMoved()
                             dismiss()
                         } label: {
-                            HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Theme.color(at: group.colorIndex))
-                                    .frame(width: 12, height: 12)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(group.name)
-                                        .font(.system(size: 15.5, weight: .semibold))
-                                        .foregroundStyle(Theme.label)
-                                    Text("\(group.folderCount) 个目录 · \(group.photoCount) 张")
-                                        .font(.system(size: 12.5))
-                                        .foregroundStyle(Theme.secondaryLabel)
-                                }
-
-                                Spacer()
-
-                                if group.id == currentGroupID {
-                                    Text("当前")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(Theme.secondaryLabel)
-                                        .padding(.horizontal, 9)
-                                        .padding(.vertical, 4)
-                                        .background(Theme.fill, in: Capsule())
-                                } else {
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(Theme.tertiaryLabel)
-                                }
-                            }
-                            .padding(14)
-                            .flatCard(radius: 16)
-                            .tappableArea()
+                            row(item)
                         }
                         .buttonStyle(PressableCardStyle())
-                        .disabled(group.id == currentGroupID)
-                        .opacity(group.id == currentGroupID ? 0.55 : 1)
+                        .disabled(item.blocked != nil)
+                        .opacity(item.blocked != nil ? 0.5 : 1)
                     }
                 }
                 .padding(Theme.Metric.margin)
@@ -268,5 +299,51 @@ struct MoveFolderSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func row(_ item: Destination) -> some View {
+        HStack(spacing: 12) {
+            if item.folderID == nil {
+                Circle()
+                    .fill(Theme.color(at: item.colorIndex))
+                    .frame(width: 12, height: 12)
+            } else {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.color(at: item.colorIndex))
+                    .frame(width: 12)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(.system(size: 15.5, weight: .semibold))
+                    .foregroundStyle(Theme.label)
+                    .lineLimit(1)
+                Text(item.detail)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.secondaryLabel)
+            }
+
+            Spacer()
+
+            if let blocked = item.blocked {
+                Text(blocked)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryLabel)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Theme.fill, in: Capsule())
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.tertiaryLabel)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.trailing, 14)
+        // 靠缩进表达层级，比画连线简单，扫一眼也够清楚
+        .padding(.leading, 14 + CGFloat(item.depth) * 20)
+        .flatCard(radius: 16)
+        .tappableArea()
     }
 }

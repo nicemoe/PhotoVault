@@ -4,6 +4,7 @@ import PhotosUI
 struct FolderDetailView: View {
 
     let folderID: UUID
+    @Binding var path: [Route]
 
     @Environment(LibraryStore.self) private var store
 
@@ -20,6 +21,15 @@ struct FolderDetailView: View {
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
 
+    // 子目录
+    @State private var showCreateFolder = false
+    @State private var newFolderName = ""
+    @State private var renamingFolder: Folder?
+    @State private var renameText = ""
+    @State private var deletingFolder: Folder?
+    @State private var movingFolder: Folder?
+
+    /// 照片用固定三列
     private var layout: CardGridLayout {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
@@ -27,32 +37,60 @@ struct FolderDetailView: View {
                               fixedColumns: 3)
     }
 
+    /// 子目录卡片和分组页用同一套尺寸
+    private var folderLayout: CardGridLayout {
+        let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
+        return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
+                              gap: Theme.Metric.cardGap,
+                              preferredItemWidth: 190)
+    }
+
     private var folder: Folder? { store.folder(folderID) }
     private var assets: [Asset] { (folder?.assets ?? []).reversed() }   // 新加入的排前面
+    private var children: [Folder] { store.children(of: folderID).sorted(by: store.folderSort) }
+    private var groupID: UUID? { store.groupID(containing: folderID) }
+    private var tint: Color {
+        guard let gid = groupID, let g = store.group(gid) else { return Theme.accent }
+        return Theme.color(at: g.colorIndex)
+    }
 
     var body: some View {
         ScrollView {
             if let folder {
-                if folder.assets.isEmpty {
-                    EmptyState(
-                        icon: "photo.badge.plus",
-                        title: "这个目录还没有照片",
-                        message: "可以从系统相册导入，\n也可以让同一 WiFi 下的电脑上传。",
-                        actionTitle: "从相册导入"
-                    ) {
-                        showPhotoPicker = true
+                VStack(alignment: .leading, spacing: 16) {
+                    breadcrumb
+
+                    if !children.isEmpty {
+                        subfolderSection
                     }
-                    .padding(.top, 40)
-                } else {
-                    LazyVGrid(columns: layout.columns, spacing: Theme.Metric.photoGap) {
-                        ForEach(assets) { asset in
-                            photoCell(asset)
+
+                    if folder.assets.isEmpty && children.isEmpty {
+                        EmptyState(
+                            icon: "photo.badge.plus",
+                            title: "这个目录是空的",
+                            message: "可以从系统相册导入照片，\n也可以在里面再建子目录来分类。",
+                            actionTitle: "从相册导入"
+                        ) {
+                            showPhotoPicker = true
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
+                    } else if !folder.assets.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if !children.isEmpty {
+                                sectionTitle("照片", count: folder.assets.count)
+                            }
+                            LazyVGrid(columns: layout.columns, spacing: Theme.Metric.photoGap) {
+                                ForEach(assets) { asset in
+                                    photoCell(asset)
+                                }
+                            }
                         }
                     }
-                    .padding(.horizontal, Theme.Metric.margin)
-                    .padding(.top, 6)
-                    .padding(.bottom, isSelecting ? 100 : 40)
                 }
+                .padding(.horizontal, Theme.Metric.margin)
+                .padding(.top, 6)
+                .padding(.bottom, isSelecting ? 100 : 40)
             }
         }
         .background(Theme.background)
@@ -90,11 +128,17 @@ struct FolderDetailView: View {
 
                         Menu {
                             Button {
+                                newFolderName = ""
+                                showCreateFolder = true
+                            } label: {
+                                Label("新建子目录", systemImage: "folder.badge.plus")
+                            }
+                            Divider()
+                            Button {
                                 showPhotoPicker = true
                             } label: {
                                 Label("从相册导入图片", systemImage: "photo.on.rectangle.angled")
                             }
-                            Divider()
                             Button {
                                 showWiFi = true
                             } label: {
@@ -144,10 +188,135 @@ struct FolderDetailView: View {
         } message: {
             Text("照片将从设备中永久移除。")
         }
+        .alert("新建子目录", isPresented: $showCreateFolder) {
+            TextField("目录名称", text: $newFolderName)
+            Button("取消", role: .cancel) {}
+            Button("创建") {
+                guard let gid = groupID,
+                      let sub = store.addFolder(to: gid, name: newFolderName, parent: folderID) else { return }
+                toastItem = Toast(icon: "checkmark.circle.fill", text: "已创建「\(sub.name)」")
+            }
+        } message: {
+            Text("例如：照片、视频、原图")
+        }
+        .alert("重命名目录", isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
+            TextField("目录名称", text: $renameText)
+            Button("取消", role: .cancel) { renamingFolder = nil }
+            Button("保存") {
+                if let f = renamingFolder { store.renameFolder(f.id, to: renameText) }
+                renamingFolder = nil
+            }
+        }
+        .confirmationDialog(
+            deletingFolder.map { "删除「\($0.name)」" } ?? "",
+            isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除目录及其中内容", role: .destructive) {
+                if let f = deletingFolder { store.deleteFolder(f.id) }
+                deletingFolder = nil
+            }
+            Button("取消", role: .cancel) { deletingFolder = nil }
+        } message: {
+            if let f = deletingFolder {
+                let subCount = store.totalFolderCount(in: f.id)
+                let photoCount = store.totalPhotoCount(in: f.id)
+                Text(subCount > 0
+                     ? "将删除 \(subCount) 个子目录、\(photoCount) 张照片，操作不可撤销。"
+                     : "将删除 \(photoCount) 张照片，操作不可撤销。")
+            }
+        }
+        .sheet(item: $movingFolder) { sub in
+            MoveFolderSheet(folder: sub, currentGroupID: groupID ?? UUID()) {
+                toastItem = Toast(icon: "arrow.right.circle.fill", text: "已移动目录")
+            }
+        }
         .overlay {
             if isImporting { ImportProgressOverlay(progress: importProgress) }
         }
         .toast($toastItem)
+    }
+
+    // MARK: 面包屑与子目录
+
+    /// 分组 › 上级目录 …
+    ///
+    /// 导航栏只显示当前目录名，层数一多就不知道自己在哪儿了。
+    @ViewBuilder
+    private var breadcrumb: some View {
+        let chain = store.path(to: folderID).dropLast()   // 最后一个是自己，标题已经写了
+        if let gid = groupID, let group = store.group(gid) {
+            HStack(spacing: 5) {
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 10))
+                Text(group.name)
+                ForEach(chain) { node in
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                    Text(node.name)
+                }
+            }
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(Theme.secondaryLabel)
+            .lineLimit(1)
+        }
+    }
+
+    private func sectionTitle(_ text: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(text)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Theme.label)
+            Text("\(count)")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.secondaryLabel)
+        }
+    }
+
+    private var subfolderSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("子目录", count: children.count)
+
+            LazyVGrid(columns: folderLayout.columns, spacing: 20) {
+                ForEach(children) { sub in
+                    Button {
+                        path.append(.folder(sub.id))
+                    } label: {
+                        FolderCard(folder: sub, side: folderLayout.side, tint: tint)
+                    }
+                    .buttonStyle(PressableCardStyle())
+                    .imageDropTarget(folderID: sub.id) { saved in
+                        toastItem = Toast(icon: "square.and.arrow.down.fill",
+                                          text: "已导入 \(saved) 张到「\(sub.name)」")
+                    }
+                    .contextMenu { subfolderMenu(sub) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subfolderMenu(_ sub: Folder) -> some View {
+        Button {
+            renameText = sub.name
+            renamingFolder = sub
+        } label: {
+            Label("重命名", systemImage: "pencil")
+        }
+
+        Button {
+            movingFolder = sub
+        } label: {
+            Label("移动到…", systemImage: "arrow.right.square")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            deletingFolder = sub
+        } label: {
+            Label("删除目录", systemImage: "trash")
+        }
     }
 
     // MARK: 单元格

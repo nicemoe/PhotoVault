@@ -132,7 +132,7 @@ struct RootView: View {
                 case .group(let id):
                     GroupDetailView(groupID: id, path: $path)
                 case .folder(let id):
-                    FolderDetailView(folderID: id)
+                    FolderDetailView(folderID: id, path: $path)
                 }
             }
         }

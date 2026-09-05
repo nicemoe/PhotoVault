@@ -140,7 +140,11 @@ final class WiFiService {
         // MARK: 目录
         case ("POST", "/api/folder/create"):
             guard let groupID = request.uuid("groupId"), let name = request.string("name") else { return .error("参数不完整") }
-            guard let folder = store.addFolder(to: groupID, name: name) else { return .error("分组不存在", status: 404) }
+            // parentId 可省略，省略就是建在分组根下
+            let parentID = request.uuid("parentId")
+            guard let folder = store.addFolder(to: groupID, name: name, parent: parentID) else {
+                return .error("分组或父目录不存在", status: 404)
+            }
             note("网页创建了目录「\(folder.name)」")
             return .ok(["id": folder.id.uuidString])
 
@@ -160,7 +164,8 @@ final class WiFiService {
             guard let id = request.uuid("id"), let groupID = request.uuid("groupId") else { return .error("参数不完整") }
             guard store.folder(id) != nil else { return .error("目录不存在", status: 404) }
             guard store.group(groupID) != nil else { return .error("目标分组不存在", status: 404) }
-            store.moveFolder(id, toGroup: groupID)
+            // parentId 省略就是挂到分组根下
+            store.moveFolder(id, toGroup: groupID, parent: request.uuid("parentId"))
             note("网页移动了一个目录")
             return .ok()
 
@@ -187,8 +192,12 @@ final class WiFiService {
             var saved = 0
             var skipped = 0
             for part in parts where part.fileName != nil && !part.data.isEmpty {
+                // 网页拖整个文件夹上来时，文件名里带着相对路径（照片/原图/a.jpg），
+                // 按它逐级建目录，把原来的层级原样搬过来，
+                // 而不是把里面的文件全抖到当前目录
+                let target = resolveFolder(for: part.fileName ?? "", under: folderID)
                 // 落盘在后台，主线程只在 attach 时短暂持有
-                if await store.addImage(data: part.data, to: folderID) != nil {
+                if await store.addImage(data: part.data, to: target) != nil {
                     saved += 1
                 } else {
                     skipped += 1
@@ -209,6 +218,25 @@ final class WiFiService {
 
     private func note(_ text: String) {
         lastEvent = text
+    }
+
+    /// 按上传文件名里的相对路径找到（必要时创建）真正要落的目录。
+    ///
+    /// 浏览器不会把路径塞进 filename，是网页那边自己拼进去的，
+    /// 所以这里要当成不可信输入处理：跳过 . 和 ..，砍掉过深的层级。
+    private func resolveFolder(for fileName: String, under root: UUID) -> UUID {
+        let parts = fileName.split(separator: "/").map(String.init)
+        guard parts.count > 1, let groupID = store.groupID(containing: root) else { return root }
+
+        var current = root
+        // 最后一段是文件名本身，不建目录
+        for raw in parts.dropLast().prefix(8) {
+            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name != ".", name != ".." else { continue }
+            guard let next = store.folder(named: name, under: current, in: groupID) else { break }
+            current = next.id
+        }
+        return current
     }
 
     // MARK: JSON
@@ -235,8 +263,12 @@ final class WiFiService {
         var json: [String: Any] = [
             "id": folder.id.uuidString,
             "name": folder.name,
+            "parentId": folder.parentID?.uuidString ?? "",
             "photoCount": folder.photoCount,
-            "cover": folder.coverAssets.map { $0.id.uuidString }
+            // 含子目录的总数，网页上要和 App 里显示的一致
+            "totalPhotoCount": store.totalPhotoCount(in: folder.id),
+            "subfolderCount": store.totalFolderCount(in: folder.id),
+            "cover": store.coverAssets(for: folder.id).map { $0.id.uuidString }
         ]
         if includeAssets {
             json["groupId"] = store.groupID(containing: folder.id)?.uuidString ?? ""

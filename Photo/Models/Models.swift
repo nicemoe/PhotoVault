@@ -23,12 +23,41 @@ struct Asset: Identifiable, Codable, Hashable {
 struct Folder: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String
+    /// 父目录；nil 表示直接挂在分组下。
+    ///
+    /// 同一分组里所有层级的目录都平铺在 group.folders 中，父子关系只靠这个
+    /// 字段表达。做成嵌套数组的话，改名、加图这类操作每次都得先递归定位到
+    /// 那一层，删父目录时也容易漏掉子树。
+    var parentID: UUID?
     var createdAt: Date = Date()
     var assets: [Asset] = []
 
+    init(id: UUID = UUID(), name: String, parentID: UUID? = nil,
+         createdAt: Date = Date(), assets: [Asset] = []) {
+        self.id = id
+        self.name = name
+        self.parentID = parentID
+        self.createdAt = createdAt
+        self.assets = assets
+    }
+
+    /// 必须手写解码，全部用 decodeIfPresent 兜默认值。
+    ///
+    /// Swift 合成的 Decodable 不会拿属性默认值当缺失时的兜底——键不在就直接
+    /// 抛错。旧的 library.json 里没有 parentID，用合成版会连整个库都解不出来，
+    /// 用户的照片会全部消失。旧数据解出来 parentID 全是 nil，也就是全在顶层，
+    /// 正好是升级前的样子。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "未命名"
+        parentID = try c.decodeIfPresent(UUID.self, forKey: .parentID)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        assets = try c.decodeIfPresent([Asset].self, forKey: .assets) ?? []
+    }
+
+    /// 只算本目录自己的，不含子目录
     var photoCount: Int { assets.count }
-    /// 封面用最近加入的几张
-    var coverAssets: [Asset] { Array(assets.suffix(4).reversed()) }
 }
 
 // MARK: - 分组（首页一层）
@@ -40,6 +69,7 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
     var createdAt: Date = Date()
     var folders: [Folder] = []
 
+    /// 含所有层级
     var folderCount: Int { folders.count }
     var photoCount: Int { folders.reduce(0) { $0 + $1.assets.count } }
 
@@ -47,6 +77,59 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
     var coverAssets: [Asset] {
         let all = folders.flatMap(\.assets).sorted { $0.createdAt > $1.createdAt }
         return Array(all.prefix(4))
+    }
+}
+
+// MARK: - 目录树
+
+extension PhotoGroup {
+
+    /// 直接挂在分组下的目录
+    var rootFolders: [Folder] { folders.filter { $0.parentID == nil } }
+
+    func children(of folderID: UUID) -> [Folder] {
+        folders.filter { $0.parentID == folderID }
+    }
+
+    /// 目录自己 + 所有子孙。删除、计数、判断循环都用它。
+    func subtree(of folderID: UUID) -> [Folder] {
+        var result: [Folder] = []
+        var pending = folders.filter { $0.id == folderID }
+        while let node = pending.popLast() {
+            result.append(node)
+            pending.append(contentsOf: folders.filter { $0.parentID == node.id })
+        }
+        return result
+    }
+
+    /// 含子目录的照片数
+    func totalPhotoCount(in folderID: UUID) -> Int {
+        subtree(of: folderID).reduce(0) { $0 + $1.assets.count }
+    }
+
+    /// 含子目录的子目录数（不含自己）
+    func totalFolderCount(in folderID: UUID) -> Int {
+        max(0, subtree(of: folderID).count - 1)
+    }
+
+    /// 目录封面：自己没图就往子目录里找，否则空目录套满图的子目录会显示成空的
+    func coverAssets(for folderID: UUID) -> [Asset] {
+        let all = subtree(of: folderID).flatMap(\.assets).sorted { $0.createdAt > $1.createdAt }
+        return Array(all.prefix(4))
+    }
+
+    /// 从分组根到该目录的一串目录，做面包屑用
+    func path(to folderID: UUID) -> [Folder] {
+        var chain: [Folder] = []
+        var cursor = folders.first { $0.id == folderID }
+        // 万一数据坏了成了环，用步数兜底，别把界面卡死
+        var guardCount = 0
+        while let node = cursor, guardCount < 64 {
+            chain.append(node)
+            cursor = node.parentID.flatMap { pid in folders.first { $0.id == pid } }
+            guardCount += 1
+        }
+        return chain.reversed()
     }
 }
 

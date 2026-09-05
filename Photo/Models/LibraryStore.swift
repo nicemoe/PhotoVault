@@ -120,6 +120,38 @@ final class LibraryStore {
         return library.groups[gi].id
     }
 
+    private func group(containing folderID: UUID) -> PhotoGroup? {
+        guard let (gi, _) = locate(folder: folderID) else { return nil }
+        return library.groups[gi]
+    }
+
+    // MARK: 目录树查询
+
+    /// 某个目录的直接子目录
+    func children(of folderID: UUID) -> [Folder] {
+        group(containing: folderID)?.children(of: folderID) ?? []
+    }
+
+    /// 从分组根到该目录的一串目录，做面包屑用
+    func path(to folderID: UUID) -> [Folder] {
+        group(containing: folderID)?.path(to: folderID) ?? []
+    }
+
+    /// 含子目录的照片数
+    func totalPhotoCount(in folderID: UUID) -> Int {
+        group(containing: folderID)?.totalPhotoCount(in: folderID) ?? 0
+    }
+
+    /// 含子目录的子目录数（不含自己）
+    func totalFolderCount(in folderID: UUID) -> Int {
+        group(containing: folderID)?.totalFolderCount(in: folderID) ?? 0
+    }
+
+    /// 目录封面：自己没图就往子目录里找
+    func coverAssets(for folderID: UUID) -> [Asset] {
+        group(containing: folderID)?.coverAssets(for: folderID) ?? []
+    }
+
     func asset(_ id: UUID) -> Asset? {
         for g in library.groups {
             for f in g.folders {
@@ -174,13 +206,32 @@ final class LibraryStore {
     // MARK: 目录
 
     @discardableResult
-    func addFolder(to groupID: UUID, name: String) -> Folder? {
+    func addFolder(to groupID: UUID, name: String, parent parentID: UUID? = nil) -> Folder? {
         guard let gi = library.groups.firstIndex(where: { $0.id == groupID }) else { return nil }
+        // 父目录必须在同一个分组里，否则会造出一个谁也看不到的孤儿目录
+        if let parentID, !library.groups[gi].folders.contains(where: { $0.id == parentID }) {
+            return nil
+        }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folder = Folder(name: trimmed.isEmpty ? "新目录" : trimmed)
+        let folder = Folder(name: trimmed.isEmpty ? "新目录" : trimmed, parentID: parentID)
         library.groups[gi].folders.append(folder)
         scheduleSave()
         return folder
+    }
+
+    /// 在某个目录下按名字取子目录，没有就建一个。
+    /// 网页拖文件夹上来时按相对路径逐级建目录用。
+    @discardableResult
+    func folder(named name: String, under parentID: UUID?, in groupID: UUID) -> Folder? {
+        guard let gi = library.groups.firstIndex(where: { $0.id == groupID }) else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let hit = library.groups[gi].folders.first(where: {
+            $0.parentID == parentID && $0.name == trimmed
+        }) {
+            return hit
+        }
+        return addFolder(to: groupID, name: trimmed, parent: parentID)
     }
 
     func renameFolder(_ id: UUID, to name: String) {
@@ -190,26 +241,63 @@ final class LibraryStore {
         scheduleSave()
     }
 
+    /// 删目录连同整棵子树，磁盘文件一并清掉
     func deleteFolder(_ id: UUID) {
-        guard let (gi, fi) = locate(folder: id) else { return }
-        let removed = library.groups[gi].folders.remove(at: fi)
-        for asset in removed.assets { removeFile(asset) }
+        guard let (gi, _) = locate(folder: id) else { return }
+        let doomed = library.groups[gi].subtree(of: id)
+        let doomedIDs = Set(doomed.map(\.id))
+        for folder in doomed {
+            for asset in folder.assets { removeFile(asset) }
+        }
+        library.groups[gi].folders.removeAll { doomedIDs.contains($0.id) }
         scheduleSave()
     }
 
-    /// 把目录移动到另一个分组
-    func moveFolder(_ id: UUID, toGroup targetGroupID: UUID) {
-        guard let (gi, fi) = locate(folder: id),
-              let ti = library.groups.firstIndex(where: { $0.id == targetGroupID }),
-              ti != gi else { return }
-        let folder = library.groups[gi].folders.remove(at: fi)
-        library.groups[ti].folders.append(folder)
+    /// 把目录（连同子树）挂到别处。parent 为 nil 表示挂在目标分组的根下。
+    func moveFolder(_ id: UUID, toGroup targetGroupID: UUID, parent parentID: UUID? = nil) {
+        guard id != parentID,
+              let (gi, fi) = locate(folder: id),
+              let ti = library.groups.firstIndex(where: { $0.id == targetGroupID }) else { return }
+
+        if let parentID {
+            // 目标父目录得真的在目标分组里
+            guard library.groups[ti].folders.contains(where: { $0.id == parentID }) else { return }
+            // 不能移进自己的子孙里——那样这棵子树就从树上断开了，谁也访问不到，
+            // 界面上还会因为 parent 链成环而走不到头
+            if ti == gi, library.groups[gi].subtree(of: id).contains(where: { $0.id == parentID }) {
+                return
+            }
+        }
+
+        if ti == gi {
+            library.groups[gi].folders[fi].parentID = parentID
+        } else {
+            // 跨分组要把整棵子树一起搬走，只搬根节点的话子目录会留在原分组变成孤儿
+            var moving = library.groups[gi].subtree(of: id)
+            let movingIDs = Set(moving.map(\.id))
+            library.groups[gi].folders.removeAll { movingIDs.contains($0.id) }
+            if let root = moving.firstIndex(where: { $0.id == id }) {
+                moving[root].parentID = parentID
+            }
+            library.groups[ti].folders.append(contentsOf: moving)
+        }
         scheduleSave()
     }
 
-    func moveFolders(in groupID: UUID, from source: IndexSet, to destination: Int) {
+    /// 在同一父目录下重排。
+    /// source/destination 是「同级列表」里的下标，不是 folders 数组的下标——
+    /// folders 里平铺着所有层级，直接按它的下标移会把别的层级也搅乱。
+    func moveFolders(in groupID: UUID, parent parentID: UUID?,
+                     from source: IndexSet, to destination: Int) {
         guard let gi = library.groups.firstIndex(where: { $0.id == groupID }) else { return }
-        library.groups[gi].folders.move(fromOffsets: source, toOffset: destination)
+        var siblings = library.groups[gi].folders.filter { $0.parentID == parentID }
+        siblings.move(fromOffsets: source, toOffset: destination)
+
+        // 把重排后的同级序列填回它们原来占的那些位置，其他层级原地不动
+        var next = siblings.makeIterator()
+        library.groups[gi].folders = library.groups[gi].folders.map { folder in
+            folder.parentID == parentID ? (next.next() ?? folder) : folder
+        }
         library.folderSort = .manual
         scheduleSave()
     }

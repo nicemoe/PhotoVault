@@ -200,15 +200,38 @@ struct GroupCard: View {
 // MARK: - 目录卡片
 
 struct FolderCard: View {
+    @Environment(LibraryStore.self) private var store
+
     let folder: Folder
     let side: CGFloat
     var tint: Color = Theme.accent
 
+    /// 子目录数和含子目录的总张数
+    private var subfolderCount: Int { store.totalFolderCount(in: folder.id) }
+    private var totalPhotos: Int { store.totalPhotoCount(in: folder.id) }
+
+    /// 有子目录时说清楚「本目录 N 张」和「一共 M 张」，
+    /// 否则一个只放子目录的空壳目录会显示成「0 张照片」，看着像坏了
+    private var caption: String {
+        guard subfolderCount > 0 else { return "\(folder.photoCount) 张照片" }
+        return "\(subfolderCount) 个子目录 · 共 \(totalPhotos) 张"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: folder.coverAssets, tint: tint, emptyIcon: "folder")
+            CoverCollage(assets: store.coverAssets(for: folder.id), tint: tint, emptyIcon: "folder")
                 .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if subfolderCount > 0 {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(6)
+                            .background(.black.opacity(0.35), in: Circle())
+                            .padding(8)
+                    }
+                }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(folder.name)
@@ -216,7 +239,7 @@ struct FolderCard: View {
                     .foregroundStyle(Theme.label)
                     .lineLimit(1)
 
-                Text("\(folder.photoCount) 张照片")
+                Text(caption)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.secondaryLabel)
             }

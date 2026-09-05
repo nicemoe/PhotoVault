@@ -49,8 +49,13 @@ struct DestinationPickerSheet: View {
                             .padding(.horizontal, 4)
 
                             VStack(spacing: 6) {
-                                ForEach(group.folders) { folder in
-                                    folderRow(folder, tint: Theme.color(at: group.colorIndex))
+                                // 按层级深度优先铺开，靠缩进表达父子；
+                                // 直接列 group.folders 的话所有层级会混成一片，
+                                // 顺序还是插入顺序，看不出谁在谁里面
+                                ForEach(flatten(group), id: \.folder.id) { row in
+                                    folderRow(row.folder,
+                                              depth: row.depth,
+                                              tint: Theme.color(at: group.colorIndex))
                                 }
 
                                 Button {
@@ -117,7 +122,20 @@ struct DestinationPickerSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func folderRow(_ folder: Folder, tint: Color) -> some View {
+    /// 把一个分组的目录树按显示顺序铺平，带上各自的深度
+    private func flatten(_ group: PhotoGroup) -> [(folder: Folder, depth: Int)] {
+        var out: [(Folder, Int)] = []
+        func walk(_ parent: UUID?, depth: Int) {
+            for f in group.folders.filter({ $0.parentID == parent }) {
+                out.append((f, depth))
+                walk(f.id, depth: depth + 1)
+            }
+        }
+        walk(nil, depth: 0)
+        return out.map { (folder: $0.0, depth: $0.1) }
+    }
+
+    private func folderRow(_ folder: Folder, depth: Int, tint: Color) -> some View {
         let disabled = folder.id == excludingFolder
 
         return Button {
@@ -158,6 +176,7 @@ struct DestinationPickerSheet: View {
                 }
             }
             .padding(12)
+            .padding(.leading, CGFloat(depth) * 18)   // 缩进表达层级
             .flatCard(radius: 16)
             .tappableArea()
         }
@@ -228,17 +247,25 @@ struct ReorderGroupsSheet: View {
 struct ReorderFoldersSheet: View {
 
     let groupID: UUID
+    /// 只重排这一层。nil = 分组根下那层。
+    var parentID: UUID?
 
     @Environment(LibraryStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
+    /// 同级目录。整个分组的目录是平铺存的，这里只取当前这一层，
+    /// 不然会把别的层级也列进来，拖动的下标也就对不上了。
+    private var siblings: [Folder] {
+        (store.group(groupID)?.folders ?? []).filter { $0.parentID == parentID }
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                hint("拖动调整目录在该分组内的顺序")
+                hint(parentID == nil ? "拖动调整目录在该分组内的顺序" : "拖动调整子目录的顺序")
 
                 List {
-                    ForEach(store.group(groupID)?.folders ?? []) { folder in
+                    ForEach(siblings) { folder in
                         HStack(spacing: 12) {
                             Image(systemName: "folder.fill")
                                 .font(.system(size: 14))
@@ -246,14 +273,15 @@ struct ReorderFoldersSheet: View {
                             Text(folder.name)
                                 .font(.system(size: 15.5, weight: .semibold))
                             Spacer()
-                            Text("\(folder.photoCount) 张")
+                            Text("\(store.totalPhotoCount(in: folder.id)) 张")
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.secondaryLabel)
                         }
                         .listRowBackground(Theme.surface)
                     }
                     .onMove { source, destination in
-                        store.moveFolders(in: groupID, from: source, to: destination)
+                        store.moveFolders(in: groupID, parent: parentID,
+                                          from: source, to: destination)
                     }
                 }
                 .listStyle(.insetGrouped)

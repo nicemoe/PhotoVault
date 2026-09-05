@@ -577,19 +577,26 @@ async function collectFiles(dt){
   if(!entries.length) return [...dt.files];
 
   const out = [];
-  for(const entry of entries) await walkEntry(entry, out);
+  for(const entry of entries) await walkEntry(entry, out, '');
   return out;
 }
 
-function walkEntry(entry, out){
+// prefix 是这个条目所在的相对路径。拖一整个文件夹进来时，
+// 要把层级带上传给手机端按原样重建，而不是把里面的文件全抖到当前目录。
+function walkEntry(entry, out, prefix){
   return new Promise(resolve => {
     if(entry.isFile){
-      entry.file(f => { out.push(f); resolve(); }, () => resolve());
+      entry.file(f => {
+        try{ f.relPath = prefix + f.name; }catch(e){}
+        out.push(f);
+        resolve();
+      }, () => resolve());
     }else if(entry.isDirectory){
       const reader = entry.createReader();
+      const sub = prefix + entry.name + '/';
       const readNext = () => reader.readEntries(async batch => {
         if(!batch.length){ resolve(); return; }
-        for(const child of batch) await walkEntry(child, out);
+        for(const child of batch) await walkEntry(child, out, sub);
         readNext();
       }, () => resolve());
       readNext();
@@ -676,7 +683,8 @@ async function upload(fileList, folderId){
 function sendBatch(files, folderId, onProgress){
   return new Promise((resolve, reject) => {
     const form = new FormData();
-    files.forEach(f => form.append('files', f, f.name));
+    // 把相对路径当文件名发过去，手机端照着逐级建目录
+    files.forEach(f => form.append('files', f, f.relPath || f.webkitRelativePath || f.name));
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload?folder=' + folderId);
