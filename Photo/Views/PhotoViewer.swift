@@ -93,13 +93,12 @@ struct PhotoViewer: View {
 
             // 横屏看视频时不再显示上下两条栏：那是全屏播放的姿势，
             // 播放控件由视频页自己出，两套栏叠在一起会互相压住
-            if showChrome, !isLandscapeVideo {
+            // 视频页的上下两条都由播放器自己出：顶栏是标题+画质+倍速+关闭，
+            // 底部是进度条和传输键。这里再压一条分享/删除既重复又挡画面，
+            // 删除在外面的列表里长按或多选都能做。
+            if showChrome, !onDarkSurface {
                 VStack {
-                    // 视频页的顶栏（标题、画质、倍速、关闭）由播放器自己出，
-                    // 两种方向一致；这里再来一条就重复了
-                    if !onDarkSurface {
-                        topBar(total: live.count, position: position)
-                    }
+                    topBar(total: live.count, position: position)
                     Spacer()
                     bottomBar(current)
                 }
@@ -111,7 +110,8 @@ struct PhotoViewer: View {
         } action: { landscape in
             isLandscape = landscape
         }
-        .statusBarHidden(!showChrome || isLandscapeVideo)
+        // 看视频时状态栏一律收起：播放页有自己的顶栏，两条叠着占地方
+        .statusBarHidden(!showChrome || onDarkSurface)
         // 幻灯片：isPlaying 变化时 task 重启，停止时自动取消
         .task(id: isPlaying) {
             guard isPlaying else { return }

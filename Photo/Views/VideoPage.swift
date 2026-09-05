@@ -426,8 +426,8 @@ struct VideoPage: View {
         .foregroundStyle(.white)
         .padding(.leading, 20 + safeInsets.left)
         .padding(.trailing, 20 + safeInsets.right)
-        // 竖屏要让开预览页的底栏；横屏只让开 home 指示条
-        .padding(.bottom, landscape ? 8 + safeInsets.bottom : 96)
+        // 预览页的底栏在视频上已经不显示了，两种方向都只让开 home 指示条
+        .padding(.bottom, 10 + safeInsets.bottom)
         .background(
             LinearGradient(colors: [.clear, .black.opacity(0.55)],
                            startPoint: .top, endPoint: .bottom)
