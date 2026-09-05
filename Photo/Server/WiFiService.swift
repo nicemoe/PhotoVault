@@ -183,12 +183,13 @@ final class WiFiService {
         // 和从里面拆出来的那一段。8GB 的片子要占 16GB。直传的话收到的
         // 那个文件就是成品，直接搬进媒体库，只占一份。
         case ("POST", "/api/upload-file"):
-            guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
-                  store.folder(folderID) != nil else {
-                return .error("目标目录不存在", status: 404)
+            guard let destination = destination(from: request) else {
+                return .error("目标不存在", status: 404)
             }
             let rawName = request.query["name"] ?? ""
-            let target = resolveFolder(for: rawName, under: folderID)
+            guard let target = resolveFolder(for: rawName, at: destination) else {
+                return .error("目标不存在", status: 404)
+            }
 
             // 小文件不会落盘，body 还在内存里，先写成临时文件再走同一条路
             var source = request.bodyFile
@@ -222,9 +223,8 @@ final class WiFiService {
             return .ok(["saved": ok ? 1 : 0, "skipped": ok ? 0 : 1])
 
         case ("POST", "/api/upload"):
-            guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
-                  store.folder(folderID) != nil else {
-                return .error("目标目录不存在", status: 404)
+            guard let destination = destination(from: request) else {
+                return .error("目标不存在", status: 404)
             }
             guard let boundary = Multipart.boundary(from: request.contentType) else {
                 return .error("请求格式不正确")
@@ -245,7 +245,7 @@ final class WiFiService {
 
                 for part in parts where part.fileName != nil && part.byteCount > 0 {
                     let name = part.fileName ?? ""
-                    let target = resolveFolder(for: name, under: folderID)
+                    guard let target = resolveFolder(for: name, at: destination) else { skipped += 1; continue }
                     if isVideoName(name) {
                         if await store.addVideo(from: part.fileURL, to: target, name: name) != nil { saved += 1 }
                         else { skipped += 1 }
@@ -267,7 +267,7 @@ final class WiFiService {
                     // 按它逐级建目录，把原来的层级原样搬过来，
                     // 而不是把里面的文件全抖到当前目录
                     let name = part.fileName ?? ""
-                    let target = resolveFolder(for: name, under: folderID)
+                    guard let target = resolveFolder(for: name, at: destination) else { skipped += 1; continue }
 
                     // 这条路也要认视频。小于落盘阈值的请求体走内存解析，
                     // 之前这里一律当图片喂给 ImageProbe，于是几 MB 的短视频
@@ -292,8 +292,11 @@ final class WiFiService {
             }
             if saved > 0 {
                 receivedCount += saved
-                let folderName = store.folder(folderID)?.name ?? "目录"
-                note("收到 \(saved) 张图片 → \(folderName)")
+                // 一批里的文件可能被相对路径分到好几个目录，报最上面那个就够了
+                let where_ = destination.parent.flatMap { store.folder($0)?.name }
+                    ?? store.groups.first { $0.id == destination.group }?.name
+                    ?? "目录"
+                note("收到 \(saved) 个文件 → \(where_)")
                 store.saveNow()
             }
             return .ok(["saved": saved, "skipped": skipped])
@@ -309,23 +312,48 @@ final class WiFiService {
 
     private func isVideoName(_ name: String) -> Bool { MediaFormats.isVideo(fileName: name) }
 
+    /// 上传落到哪儿。目录页给的是目录，分组页给的是分组。
+    struct Destination {
+        var group: UUID
+        /// 从分组页拖进来时没有父目录，路径里的第一段就是要建的目录
+        var parent: UUID?
+    }
+
+    /// 从请求参数里认出目标。folder 优先，没有就看 group。
+    private func destination(from request: HTTPRequest) -> Destination? {
+        if let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
+           store.folder(folderID) != nil,
+           let groupID = store.groupID(containing: folderID) {
+            return Destination(group: groupID, parent: folderID)
+        }
+        if let groupID = request.query["group"].flatMap(UUID.init(uuidString:)),
+           store.groups.contains(where: { $0.id == groupID }) {
+            return Destination(group: groupID, parent: nil)
+        }
+        return nil
+    }
+
     /// 按上传文件名里的相对路径找到（必要时创建）真正要落的目录。
     ///
     /// 浏览器不会把路径塞进 filename，是网页那边自己拼进去的，
     /// 所以这里要当成不可信输入处理：跳过 . 和 ..，砍掉过深的层级。
-    private func resolveFolder(for fileName: String, under root: UUID) -> UUID {
+    ///
+    /// 从分组页拖一整个文件夹进来时没有父目录，路径里的第一段就是要建的目录。
+    /// 这时候要是连一段路径都没有（散文件直接拖到分组上），得有个地方装，
+    /// 收进「未分类」——和「导入」文件夹那条路的规矩一致。
+    private func resolveFolder(for fileName: String, at destination: Destination) -> UUID? {
         let parts = fileName.split(separator: "/").map(String.init)
-        guard parts.count > 1, let groupID = store.groupID(containing: root) else { return root }
+        var current = destination.parent
 
-        var current = root
         // 最后一段是文件名本身，不建目录
         for raw in parts.dropLast().prefix(8) {
             let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, name != ".", name != ".." else { continue }
-            guard let next = store.folder(named: name, under: current, in: groupID) else { break }
+            guard let next = store.folder(named: name, under: current, in: destination.group) else { break }
             current = next.id
         }
-        return current
+        if let current { return current }
+        return store.folder(named: "未分类", under: nil, in: destination.group)?.id
     }
 
     // MARK: JSON
