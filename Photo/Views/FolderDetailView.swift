@@ -476,16 +476,27 @@ struct FolderDetailView: View {
         var videos = 0
 
         for (index, item) in items.enumerated() {
-            // 视频必须按文件搬。手机拍的 1 分钟 4K 就有几百 MB，
-            // 走 Data 读进内存会直接被系统杀掉。
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    if await store.addVideo(from: movie.url, to: folderID) != nil { videos += 1 }
+            let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
+            // 先按文件取，这样能拿到原始文件名当标题
+            let picked = try? await item.loadTransferable(type: PickedFile.self)
+
+            if isVideo {
+                // 视频必须按文件搬。手机拍的 1 分钟 4K 就有几百 MB，
+                // 走 Data 读进内存会直接被系统杀掉。
+                if let picked {
+                    if await store.addVideo(from: picked.url, to: folderID,
+                                            name: picked.name) != nil { videos += 1 }
                     // persistVideo 成功时是移动走的，失败才留下，这里兜底清一次
-                    try? FileManager.default.removeItem(at: movie.url)
+                    try? FileManager.default.removeItem(at: picked.url)
                 }
+            } else if let picked, let data = try? Data(contentsOf: picked.url) {
+                if await store.addImage(data: data, to: folderID, name: picked.name) != nil {
+                    photos += 1
+                }
+                try? FileManager.default.removeItem(at: picked.url)
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       await store.addImage(data: data, to: folderID) != nil {
+                // 有些来源给不出文件表示，退回按字节读，只是没有标题
                 photos += 1
             }
             importProgress = Double(index + 1) / Double(items.count)
@@ -502,23 +513,38 @@ struct FolderDetailView: View {
     }
 }
 
-// MARK: - 从系统相册取视频
+// MARK: - 从系统相册取件
 
-/// PhotosPicker 给视频的是一个临时文件。
-/// 它在回调返回后就会被清掉，所以必须先拷到自己的临时目录再用。
-struct PickedMovie: Transferable {
+/// PhotosPicker 给的是一个临时文件，回调返回后就被清掉，必须先拷走。
+///
+/// 走 FileRepresentation 还有个附带好处：临时文件的名字通常就是原始文件名
+/// （IMG_1234 之类），能顺手把标题存下来。loadTransferable(type: Data.self)
+/// 只给字节，拿不到名字。
+struct PickedFile: Transferable {
     let url: URL
+    /// 原始文件名，不含扩展名；拿不到时是空串
+    let name: String
 
     static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { movie in
-            SentTransferredFile(movie.url)
+        FileRepresentation(contentType: .movie) { file in
+            SentTransferredFile(file.url)
         } importing: { received in
-            let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + "." + received.file.pathExtension)
-            try? FileManager.default.removeItem(at: copy)
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return PickedMovie(url: copy)
+            try PickedFile.copy(received.file)
         }
+        FileRepresentation(contentType: .image) { file in
+            SentTransferredFile(file.url)
+        } importing: { received in
+            try PickedFile.copy(received.file)
+        }
+    }
+
+    private static func copy(_ source: URL) throws -> PickedFile {
+        let ext = source.pathExtension
+        let copy = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
+        try? FileManager.default.removeItem(at: copy)
+        try FileManager.default.copyItem(at: source, to: copy)
+        return PickedFile(url: copy, name: source.deletingPathExtension().lastPathComponent)
     }
 }
 

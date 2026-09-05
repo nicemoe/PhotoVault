@@ -15,6 +15,12 @@ enum DropImport {
             }
         }
     }
+
+    /// 拖进来的文件名。suggestedName 大多数来源都会给，拿不到就是空串。
+    static func name(from provider: NSItemProvider) -> String {
+        guard let raw = provider.suggestedName else { return "" }
+        return (raw as NSString).deletingPathExtension
+    }
 }
 
 /// 把任意视图变成「拖图片进来就导入到某个目录」的投放目标
@@ -63,8 +69,9 @@ struct ImageDropTarget: ViewModifier {
                 Task {
                     var saved = 0
                     for provider in usable {
+                        let name = DropImport.name(from: provider)
                         if let data = await DropImport.data(from: provider),
-                           await store.addImage(data: data, to: folderID) != nil {
+                           await store.addImage(data: data, to: folderID, name: name) != nil {
                             saved += 1
                         }
                     }

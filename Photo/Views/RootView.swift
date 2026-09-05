@@ -301,12 +301,22 @@ struct RootView: View {
         var videos = 0
 
         for (index, item) in items.enumerated() {
-            // 视频按文件搬，不读进内存——几百 MB 的 4K 会直接把 App 撑爆
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    if await store.addVideo(from: movie.url, to: folderID) != nil { videos += 1 }
-                    try? FileManager.default.removeItem(at: movie.url)
+            let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
+            // 先按文件取，顺带拿到原始文件名当标题
+            let picked = try? await item.loadTransferable(type: PickedFile.self)
+
+            if isVideo {
+                // 视频按文件搬，不读进内存——几百 MB 的 4K 会直接把 App 撑爆
+                if let picked {
+                    if await store.addVideo(from: picked.url, to: folderID,
+                                            name: picked.name) != nil { videos += 1 }
+                    try? FileManager.default.removeItem(at: picked.url)
                 }
+            } else if let picked, let data = try? Data(contentsOf: picked.url) {
+                if await store.addImage(data: data, to: folderID, name: picked.name) != nil {
+                    photos += 1
+                }
+                try? FileManager.default.removeItem(at: picked.url)
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       await store.addImage(data: data, to: folderID) != nil {
                 photos += 1

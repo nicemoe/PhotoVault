@@ -178,21 +178,12 @@ struct PhotoViewer: View {
         .padding(.top, 8)
     }
 
-    /// 标题。
-    ///
-    /// 从系统相册导入的拿不到文件名，这时显示加入时间——不能拿目录名顶上，
-    /// 那看着像文件名其实不是，一整个目录里每张都叫同一个名字。
+    /// 标题就是导入时的原始文件名。
+    /// 拿不到名字的（老数据、少数给不出文件表示的来源）就留空，
+    /// 不拿目录名或日期去顶——那看着像文件名其实不是。
     private func title(for asset: Asset?) -> String {
-        guard let asset else { return "" }
-        if !asset.originalName.isEmpty { return asset.originalName }
-        return Self.dateText.string(from: asset.createdAt)
+        asset?.originalName ?? ""
     }
-
-    private static let dateText: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy年M月d日 HH:mm"
-        return f
-    }()
 
     private func videoPage(for asset: Asset, in live: [Asset]) -> some View {
         VideoPage(asset: asset,
