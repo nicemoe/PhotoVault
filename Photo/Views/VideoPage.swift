@@ -228,6 +228,7 @@ struct VideoPage: View {
     @State private var scrubbing = false
     @State private var observer: Any?
     @State private var endObserver: NSObjectProtocol?
+    @State private var statusObserver: NSKeyValueObservation?
     @State private var rate: Float = 1
 
     // 缩放，和图片那边一套参数
@@ -254,7 +255,13 @@ struct VideoPage: View {
     @State private var pump = SeekPump()
 
     /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
-    private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
+    /// 真的放不了。
+    ///
+    /// 不拿导入时存下来的元信息当判据。那是一次性的快照：探测碰巧失败过、
+    /// 或者文件后来被换成了正常的 mp4，这条记录还是会一直说「不支持」，
+    /// 而 App 根本不会再看一眼文件。
+    /// 改成让播放器自己说——建出来试试，AVPlayerItem 报 .failed 才认。
+    @State private var failed = false
 
     var body: some View {
         GeometryReader { geo in
@@ -277,7 +284,7 @@ struct VideoPage: View {
                                height: max(geo.size.height, windowSize.height))
                         .scaleEffect(scale)
                         .offset(offset)
-                } else if !unplayable {
+                } else if !failed {
                     // 播放器还没建好时先摆封面，翻到这一页不至于是一片黑
                     AssetImage(asset: asset, maxPixel: 900)
                         .aspectRatio(contentMode: .fit)
@@ -302,7 +309,7 @@ struct VideoPage: View {
                     .contentShape(Rectangle())
                     .gesture(magnifyGesture, including: locked ? .subviews : .all)
 
-                if unplayable {
+                if failed {
                     unplayableNote
                 } else if chromeVisible {
                     controls(landscape: landscape, size: geo.size)
@@ -342,14 +349,14 @@ struct VideoPage: View {
     // MARK: 控件
 
     private var unplayableNote: some View {
-        // 存住了但 iOS 解不了（mkv、rmvb 这些）。
+        // 播放器真的试过、报了 .failed 才会走到这儿。
         // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
         VStack(spacing: 10) {
             Image(systemName: "film")
                 .font(.system(size: 40))
             Text("这个格式 iOS 无法播放")
                 .font(.system(size: 14, weight: .semibold))
-            Text("文件已保存，可以用底栏分享导出")
+            Text("文件已保存，可以从「文件」App 里拷回电脑")
                 .font(.system(size: 12))
                 .opacity(0.7)
         }
@@ -644,7 +651,9 @@ struct VideoPage: View {
     // MARK: 播放
 
     private func start() {
-        guard player == nil, !unplayable else { return }
+        // failed 只在这一次浏览里有效：翻走再翻回来会重建视图，也就会再试一次。
+        // 文件可能已经被换成能放的了，没道理一直记着仇。
+        guard player == nil, !failed else { return }
         // 静音键按下时也要出声——用户是主动点开看的，不是自动播放的广告
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -665,6 +674,16 @@ struct VideoPage: View {
             current = time.seconds
             if duration <= 0, let d = made.currentItem?.duration.seconds, d.isFinite {
                 duration = d
+            }
+        }
+
+        // 能不能放，让播放器自己说。AVFoundation 解不了这个封装或编码时，
+        // item 会走到 .failed，这时候才亮「解不开」那一页。
+        statusObserver = item.observe(\.status, options: [.new]) { item, _ in
+            Task { @MainActor in
+                guard item.status == .failed else { return }
+                failed = true
+                stop()
             }
         }
 
@@ -695,6 +714,8 @@ struct VideoPage: View {
         observer = nil
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
+        statusObserver?.invalidate()
+        statusObserver = nil
         // 交出进度必须赶在把 current 清零之前
         if current > 0.5 { onLeave?(current) }
         player?.pause()
@@ -734,7 +755,7 @@ struct VideoPage: View {
     }
 
     private func skip(_ delta: Double) {
-        guard !unplayable, duration > 0 else { return }
+        guard !failed, duration > 0 else { return }
         let target = min(max(0, current + delta), duration)
         current = target
         seek(to: target)
@@ -815,7 +836,7 @@ struct VideoPage: View {
                                 height: steadyOffset.height + translation.height)
                 return
             }
-            guard !unplayable else { return }
+            guard !failed else { return }
 
             if dragMode == nil {
                 // 位移太小时方向不可信，等它走出去一点再定
