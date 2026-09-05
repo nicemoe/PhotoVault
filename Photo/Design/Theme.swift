@@ -162,10 +162,11 @@ struct CircleIconLook: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .font(.system(size: glyphSize, weight: glyphWeight))
+            // 字号放大一档：没有圆底衬着，原来的尺寸看着偏小
+            .font(.system(size: glyphSize + 2, weight: glyphWeight))
             .foregroundStyle(Theme.accent)
-            .frame(width: diameter, height: diameter)
-            .background(Theme.accent.opacity(0.12), in: Circle())
+            // 不再画圆底。导航栏上并排几个圆点显得碎，
+            // 光图标本身就够清楚了；点击区域仍按 hitSize 留足。
             .frame(width: hitSize, height: hitSize)
             .contentShape(Rectangle())
     }

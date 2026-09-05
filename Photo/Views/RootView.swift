@@ -98,33 +98,30 @@ struct RootView: View {
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 6) {
-                        sideMenu
-
-                        if wifi.isRunning {
-                            Button {
-                                showWiFi = true
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
-                                    Text("传输中")
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                }
-                                .foregroundStyle(Theme.secondaryLabel)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Theme.fill, in: Capsule())
+                    if wifi.isRunning {
+                        Button {
+                            showWiFi = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
+                                Text("传输中")
+                                    .font(.system(size: 12.5, weight: .semibold))
                             }
+                            .foregroundStyle(Theme.secondaryLabel)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Theme.fill, in: Capsule())
                         }
                     }
                 }
-                // 两个按钮放进同一个 ToolbarItem 里用 HStack 摆，
+                // 三个按钮放进同一个 ToolbarItem 里用 HStack 摆，
                 // 这样各级页面的按钮位置和间距完全一致；交给
                 // ToolbarItemGroup 排的话间距由系统决定，会偏大。
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 0) {
-                        SortMenu(mode: $store.groupSort) { showReorder = true }
                         addMenu
+                        SortMenu(mode: $store.groupSort) { showReorder = true }
+                        sideMenu
                     }
                 }
             }
