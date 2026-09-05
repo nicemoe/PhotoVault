@@ -23,7 +23,7 @@ jobs:
   build:
     name: 未签名 IPA
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     env:
       PROJECT: Photo.xcodeproj
@@ -54,6 +54,24 @@ jobs:
             exit 1
           fi
 
+      - name: 缓存 Swift 包
+        uses: actions/cache@v4
+        with:
+          path: .spm
+          key: spm-${{ runner.os }}-${{ hashFiles('Photo.xcodeproj/project.pbxproj') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: 解析 Swift 包依赖
+        run: |
+          set -euo pipefail
+          # 单独一步：失败时一眼能看出是拉包还是编译的问题。
+          # KSPlayer 带的 FFmpeg 是预编译 xcframework，头一次要下几百 MB。
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath .spm
+          du -sh .spm || true
+
       - name: 列出工程结构
         run: xcodebuild -list -project "$PROJECT"
 
@@ -66,6 +84,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+            -clonedSourcePackagesDirPath .spm \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
