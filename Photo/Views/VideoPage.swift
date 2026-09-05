@@ -95,107 +95,6 @@ struct GestureCatcher: UIViewRepresentable {
     }
 }
 
-/// 拖动时的 seek 泵。
-///
-/// 手指每移动一帧就发一次 seek 的话，AVPlayer 处理不过来会把中间那些丢掉
-/// 或排队，画面卡在原处不动，直到松手才跳——看着就像「只有松手才生效」。
-/// 同一时刻只让一个 seek 在飞，期间来的新位置只留最新那个，
-/// 上一个完成时再接着发。
-@MainActor
-final class SeekPump {
-
-    private weak var player: AVPlayer?
-    private var inFlight = false
-    private var pending: Double?
-
-    func attach(_ player: AVPlayer?) {
-        self.player = player
-        inFlight = false
-        pending = nil
-    }
-
-    /// 拖动过程用：带容差，跳到最近的关键帧就行，要的是跟手
-    func scrub(to seconds: Double) {
-        guard let player else { return }
-        guard !inFlight else {
-            pending = seconds
-            return
-        }
-        inFlight = true
-        player.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600)) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.inFlight = false
-                if let next = self.pending {
-                    self.pending = nil
-                    self.scrub(to: next)
-                }
-            }
-        }
-    }
-
-    /// 松手、点进度条、跳 ±10 秒用：落到准确位置
-    func settle(to seconds: Double) {
-        pending = nil
-        inFlight = false
-        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
-                     toleranceBefore: .zero, toleranceAfter: .zero)
-    }
-}
-
-/// 承载 AVPlayerLayer 的裸视图。
-///
-/// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
-/// 工具栏没法跟着单击开合，缩放和快进手势也做不了。
-final class PlayerHostView: UIView {
-
-    /// 标准做法：AVPlayerLayer 就是这个视图的背衬层，尺寸自动跟着视图走。
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-
-    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-
-    var player: AVPlayer? {
-        get { playerLayer.player }
-        set { playerLayer.player = newValue }
-    }
-
-    var gravity: AVLayerVideoGravity {
-        get { playerLayer.videoGravity }
-        set { playerLayer.videoGravity = newValue }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        playerLayer.videoGravity = .resizeAspect
-        backgroundColor = .clear
-        // 画面本身不需要接触摸。开着的话它会先把触摸吃掉，
-        // 外层的单击/双击就不一定收得到。
-        isUserInteractionEnabled = false
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
-struct PlayerLayerView: UIViewRepresentable {
-    let player: AVPlayer?
-    /// 适应（留黑边）还是填充（裁掉溢出的部分）
-    var fill = false
-
-    private var gravity: AVLayerVideoGravity { fill ? .resizeAspectFill : .resizeAspect }
-
-    func makeUIView(context: Context) -> PlayerHostView {
-        let view = PlayerHostView()
-        view.player = player
-        view.gravity = gravity
-        return view
-    }
-
-    func updateUIView(_ view: PlayerHostView, context: Context) {
-        if view.player !== player { view.player = player }
-        if view.gravity != gravity { view.gravity = gravity }
-    }
-}
-
 /// 预览页里的一段视频。
 ///
 /// 视频页不在 TabView 里，横向手势全归播放器：
@@ -221,13 +120,11 @@ struct VideoPage: View {
     /// 视图要走了，把当前进度交出去
     var onLeave: ((Double) -> Void)?
 
-    @State private var player: AVPlayer?
+    @State private var engine: (any VideoEngine)?
     @State private var isPlaying = false
     @State private var current: Double = 0
     @State private var duration: Double = 0
     @State private var scrubbing = false
-    @State private var observer: Any?
-    @State private var endObserver: NSObjectProtocol?
     @State private var rate: Float = 1
 
     // 缩放，和图片那边一套参数
@@ -250,11 +147,11 @@ struct VideoPage: View {
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
 
-    /// 拖动时合并 seek 请求
-    @State private var pump = SeekPump()
-
-    /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
-    private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
+    /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装，
+    /// 这种交给软解引擎（KSPlayer + FFmpeg）
+    private var needsSoftwareDecoding: Bool { asset.duration <= 0 && asset.width == 0 }
+    /// 软解也起不来才算真的放不了
+    @State private var failed = false
 
     var body: some View {
         GeometryReader { geo in
@@ -264,20 +161,22 @@ struct VideoPage: View {
                 // 视频统一放在黑底上，和主流播放器一致，也让白色控件始终看得清
                 Color.black
 
-                if player != nil {
-                    // 尺寸取窗口和容器里大的那个，比例交给 AVPlayerLayer 自己算。
+                if let engine {
+                    // 尺寸取窗口和容器里大的那个，比例交给播放层自己算。
                     //
                     // aspect fit 在满屏容器里必定至少铺满一个方向，所以「四边都
                     // 有黑边」只可能是容器本身没满屏。别拿 asset.width/height 去
                     // 算一个框套在外面——那尺寸是导入时探测的，和播放层实际显示
                     // 的比例差一点，播放层就会在框里再 fit 一次，叠出永远消不掉
                     // 的黑边。
-                    PlayerLayerView(player: player, fill: fill)
+                    EngineView(engine: engine)
+                        // 引擎换人时强制重建，别把上一个的画面层留在容器里
+                        .id(ObjectIdentifier(engine))
                         .frame(width: max(geo.size.width, windowSize.width),
                                height: max(geo.size.height, windowSize.height))
                         .scaleEffect(scale)
                         .offset(offset)
-                } else if !unplayable {
+                } else if !failed {
                     // 播放器还没建好时先摆封面，翻到这一页不至于是一片黑
                     AssetImage(asset: asset, maxPixel: 900)
                         .aspectRatio(contentMode: .fit)
@@ -302,7 +201,7 @@ struct VideoPage: View {
                     .contentShape(Rectangle())
                     .gesture(magnifyGesture, including: locked ? .subviews : .all)
 
-                if unplayable {
+                if failed {
                     unplayableNote
                 } else if chromeVisible {
                     controls(landscape: landscape, size: geo.size)
@@ -342,14 +241,14 @@ struct VideoPage: View {
     // MARK: 控件
 
     private var unplayableNote: some View {
-        // 存住了但 iOS 解不了（mkv、rmvb 这些）。
+        // 走到这儿说明 AVFoundation 和软解都起不来。
         // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
         VStack(spacing: 10) {
             Image(systemName: "film")
                 .font(.system(size: 40))
-            Text("这个格式 iOS 无法播放")
+            Text("这个文件解不开")
                 .font(.system(size: 14, weight: .semibold))
-            Text("文件已保存，可以用底栏分享导出")
+            Text("文件已保存，可以从「文件」App 里拷回电脑")
                 .font(.system(size: 12))
                 .opacity(0.7)
         }
@@ -472,6 +371,7 @@ struct VideoPage: View {
                                                 height: max(size.height, windowSize.height))) <= 0.25 {
                         Button {
                             withAnimation(.easeOut(duration: 0.2)) { fill.toggle() }
+                            engine?.setFill(fill)
                         } label: {
                             Image(systemName: fill
                                   ? "arrow.down.right.and.arrow.up.left"
@@ -596,7 +496,7 @@ struct VideoPage: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         guard duration > 0 else { return }
-                        if !scrubbing { player?.pause() }   // 同上，拖之前先停
+                        if !scrubbing { engine?.pause() }   // 同上，拖之前先停
                         scrubbing = true
                         current = min(max(0, value.location.x / width), 1) * duration
                         seek(to: current, precise: false)   // 拖的过程要快，容差交给系统
@@ -606,10 +506,7 @@ struct VideoPage: View {
                         current = min(max(0, value.location.x / width), 1) * duration
                         seek(to: current, precise: true)    // 松手落到准确位置
                         scrubbing = false
-                        if isPlaying {
-                            player?.play()
-                            player?.rate = rate
-                        }
+                        if isPlaying { engine?.play() }
                     }
             )
         }
@@ -644,62 +541,59 @@ struct VideoPage: View {
     // MARK: 播放
 
     private func start() {
-        guard player == nil, !unplayable else { return }
+        guard engine == nil, !failed else { return }
         // 静音键按下时也要出声——用户是主动点开看的，不是自动播放的广告
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        let item = AVPlayerItem(url: LibraryStore.fileURL(for: asset))
-        let made = AVPlayer(playerItem: item)
-        made.actionAtItemEnd = .pause
-        made.defaultRate = rate
-        player = made
-        pump.attach(made)
-        duration = asset.duration
+        let url = LibraryStore.fileURL(for: asset)
+        // 导入时 AVFoundation 探不出时长和尺寸，就是它解不了这个封装，
+        // 直接上软解。能硬解的一律走 AVPlayer——省电，seek 也跟手得多。
+        var made: any VideoEngine = needsSoftwareDecoding
+            ? SoftwareEngine(url: url)
+            : AVEngine(url: url)
 
-        // 每 0.2 秒刷一次进度；拖动过程中不要被回调顶回去
-        observer = made.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
-        ) { time in
+        made.onProgress = { time in
+            // 拖动过程中不要被回调顶回去
             guard !scrubbing, dragMode != .seek else { return }
-            current = time.seconds
-            if duration <= 0, let d = made.currentItem?.duration.seconds, d.isFinite {
-                duration = d
-            }
+            current = time
         }
-
+        made.onDuration = { value in
+            if duration <= 0 { duration = value }
+        }
         // 播完要把按钮切回「播放」。光靠进度回调判断不可靠：
         // 最后一帧的时间戳未必正好等于时长，会一直显示成暂停。
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-        ) { _ in
-            Task { @MainActor in
-                isPlaying = false
-                if duration > 0 { current = duration }
-            }
+        made.onFinish = {
+            isPlaying = false
+            if duration > 0 { current = duration }
         }
+        made.onFailure = {
+            // 软解也起不来，才认定这个文件真的放不了
+            failed = true
+            engine?.shutdown()
+            engine = nil
+        }
+
+        made.setRate(rate)
+        made.setFill(fill)
+        engine = made
+        duration = asset.duration
 
         // 横竖屏切换会重建这个视图，从上次的位置接着播，别退回开头
         if startAt > 0.5 {
             current = startAt
-            made.seek(to: CMTime(seconds: startAt, preferredTimescale: 600))
+            made.seek(to: startAt, precise: true)
         }
 
         made.play()
-        made.rate = rate
         isPlaying = true
     }
 
     private func stop() {
-        if let observer { player?.removeTimeObserver(observer) }
-        observer = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
         // 交出进度必须赶在把 current 清零之前
         if current > 0.5 { onLeave?(current) }
-        player?.pause()
-        player = nil
-        pump.attach(nil)
+        engine?.shutdown()
+        engine = nil
         isPlaying = false
         current = 0
         scale = 1; steadyScale = 1
@@ -708,33 +602,31 @@ struct VideoPage: View {
     }
 
     private func toggle() {
-        guard let player else { return }
+        guard let engine else { return }
         if isPlaying {
-            player.pause()
+            engine.pause()
         } else {
             // 播完了再按就从头来
             if duration > 0, current >= duration - 0.15 { seek(to: 0) }
-            player.play()
-            player.rate = rate
+            engine.play()
         }
         isPlaying.toggle()
     }
 
-    /// precise=false 时把容差交给系统，跳到最近的关键帧就行——
+    /// precise=false 时把容差交给引擎，跳到最近的关键帧就行——
     /// 拖动过程中每帧都做精确 seek 会明显卡顿。
     private func seek(to seconds: Double, precise: Bool = true) {
-        if precise { pump.settle(to: seconds) } else { pump.scrub(to: seconds) }
+        engine?.seek(to: seconds, precise: precise)
     }
 
     private func setRate(_ value: Float) {
         rate = value
-        player?.defaultRate = value
-        if isPlaying { player?.rate = value }
+        engine?.setRate(value)
         show(hint: value == 1 ? "正常速度" : "\(trimZero(Double(value)))× 速度")
     }
 
     private func skip(_ delta: Double) {
-        guard !unplayable, duration > 0 else { return }
+        guard !failed, duration > 0 else { return }
         let target = min(max(0, current + delta), duration)
         current = target
         seek(to: target)
@@ -815,7 +707,7 @@ struct VideoPage: View {
                                 height: steadyOffset.height + translation.height)
                 return
             }
-            guard !unplayable else { return }
+            guard !failed else { return }
 
             if dragMode == nil {
                 // 位移太小时方向不可信，等它走出去一点再定
@@ -826,12 +718,12 @@ struct VideoPage: View {
                     scrubbing = true
                     // 拖的时候必须先暂停。不停的话每次 seek 完播放器立刻
                     // 按原速继续往前跑，画面被一次次拽走，看着就是不跟手。
-                    player?.pause()
+                    engine?.pause()
                 } else {
                     dragMode = start.x < size.width / 2 ? .brightness : .volume
                     dragAnchor = dragMode == .brightness
                         ? Double(UIScreen.main.brightness)
-                        : Double(player?.volume ?? 1)
+                        : Double(engine?.volume ?? 1)
                     if dragMode == .brightness, systemBrightness == nil {
                         systemBrightness = UIScreen.main.brightness
                     }
@@ -853,7 +745,7 @@ struct VideoPage: View {
                 show(hint: "亮度 \(Int(level * 100))%")
             case .volume:
                 let level = min(max(0, dragAnchor + Double(-translation.height / size.height)), 1)
-                player?.volume = Float(level)
+                engine?.volume = Float(level)
                 show(hint: "音量 \(Int(level * 100))%")
             case nil:
                 break
@@ -863,10 +755,7 @@ struct VideoPage: View {
             if dragMode == .seek {
                 seek(to: current, precise: true)   // 松手落到准确位置
                 scrubbing = false
-                if isPlaying {
-                    player?.play()
-                    player?.rate = rate
-                }
+                if isPlaying { engine?.play() }
             }
             dragMode = nil
             steadyOffset = offset
