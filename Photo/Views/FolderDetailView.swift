@@ -137,7 +137,7 @@ struct FolderDetailView: View {
                             Button {
                                 showPhotoPicker = true
                             } label: {
-                                Label("从相册导入图片", systemImage: "photo.on.rectangle.angled")
+                                Label("从相册导入", systemImage: "photo.on.rectangle.angled")
                             }
                             Button {
                                 showWiFi = true
@@ -158,7 +158,7 @@ struct FolderDetailView: View {
             isPresented: $showPhotoPicker,
             selection: $pickerItems,
             maxSelectionCount: nil,
-            matching: .images,
+            matching: .any(of: [.images, .videos]),
             photoLibrary: .shared()
         )
         .onChange(of: pickerItems) { _, items in
@@ -342,6 +342,23 @@ struct FolderDetailView: View {
                             .fill(Color.black.opacity(selected ? 0.25 : 0))
                     }
                 }
+                // 视频角标放左下，选择标记在右下，两边不打架
+                .overlay(alignment: .bottomLeading) {
+                    if asset.isVideo {
+                        HStack(spacing: 3) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 8.5, weight: .bold))
+                            Text(asset.durationText)
+                                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(6)
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if isSelecting {
                         Image(systemName: selected ? "checkmark.circle.fill" : "circle")
@@ -366,7 +383,7 @@ struct FolderDetailView: View {
                 Button(role: .destructive) {
                     store.deleteAssets([asset.id], from: folderID)
                 } label: {
-                    Label("删除照片", systemImage: "trash")
+                    Label(asset.isVideo ? "删除视频" : "删除照片", systemImage: "trash")
                 }
             }
         }
@@ -417,12 +434,21 @@ struct FolderDetailView: View {
     private func runImport(_ items: [PhotosPickerItem]) async {
         isImporting = true
         importProgress = 0
-        var saved = 0
+        var photos = 0
+        var videos = 0
 
         for (index, item) in items.enumerated() {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               await store.addImage(data: data, to: folderID) != nil {
-                saved += 1
+            // 视频必须按文件搬。手机拍的 1 分钟 4K 就有几百 MB，
+            // 走 Data 读进内存会直接被系统杀掉。
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                    if await store.addVideo(from: movie.url, to: folderID) != nil { videos += 1 }
+                    // persistVideo 成功时是移动走的，失败才留下，这里兜底清一次
+                    try? FileManager.default.removeItem(at: movie.url)
+                }
+            } else if let data = try? await item.loadTransferable(type: Data.self),
+                      await store.addImage(data: data, to: folderID) != nil {
+                photos += 1
             }
             importProgress = Double(index + 1) / Double(items.count)
         }
@@ -430,7 +456,31 @@ struct FolderDetailView: View {
         store.saveNow()
         pickerItems = []
         isImporting = false
-        toastItem = Toast(icon: "photo.badge.checkmark", text: "已导入 \(saved) 张照片")
+
+        let parts = [photos > 0 ? "\(photos) 张照片" : nil,
+                     videos > 0 ? "\(videos) 个视频" : nil].compactMap { $0 }
+        toastItem = Toast(icon: "photo.badge.checkmark",
+                          text: parts.isEmpty ? "没有导入任何内容" : "已导入 " + parts.joined(separator: "、"))
+    }
+}
+
+// MARK: - 从系统相册取视频
+
+/// PhotosPicker 给视频的是一个临时文件。
+/// 它在回调返回后就会被清掉，所以必须先拷到自己的临时目录再用。
+struct PickedMovie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "." + received.file.pathExtension)
+            try? FileManager.default.removeItem(at: copy)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
+        }
     }
 }
 

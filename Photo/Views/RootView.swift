@@ -197,7 +197,7 @@ struct RootView: View {
             isPresented: $showPhotoPicker,
             selection: $pickerItems,
             maxSelectionCount: nil,
-            matching: .images,
+            matching: .any(of: [.images, .videos]),
             photoLibrary: .shared()
         )
         .onChange(of: pickerItems) { _, items in
@@ -330,12 +330,19 @@ struct RootView: View {
     private func runImport(items: [PhotosPickerItem], into folderID: UUID) async {
         isImporting = true
         importProgress = 0
-        var saved = 0
+        var photos = 0
+        var videos = 0
 
         for (index, item) in items.enumerated() {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               await store.addImage(data: data, to: folderID) != nil {
-                saved += 1
+            // 视频按文件搬，不读进内存——几百 MB 的 4K 会直接把 App 撑爆
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                    if await store.addVideo(from: movie.url, to: folderID) != nil { videos += 1 }
+                    try? FileManager.default.removeItem(at: movie.url)
+                }
+            } else if let data = try? await item.loadTransferable(type: Data.self),
+                      await store.addImage(data: data, to: folderID) != nil {
+                photos += 1
             }
             importProgress = Double(index + 1) / Double(items.count)
         }
@@ -344,7 +351,11 @@ struct RootView: View {
         pickerItems = []
         importDestination = nil
         isImporting = false
-        toastItem = Toast(icon: "photo.badge.checkmark", text: "已导入 \(saved) 张照片")
+
+        let parts = [photos > 0 ? "\(photos) 张照片" : nil,
+                     videos > 0 ? "\(videos) 个视频" : nil].compactMap { $0 }
+        toastItem = Toast(icon: "photo.badge.checkmark",
+                          text: parts.isEmpty ? "没有导入任何内容" : "已导入 " + parts.joined(separator: "、"))
     }
 }
 

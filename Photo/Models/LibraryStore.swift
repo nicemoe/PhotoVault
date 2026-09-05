@@ -17,10 +17,22 @@ enum Paths {
         return url
     }()
 
+    /// 视频封面缓存。
+    /// 抽一帧要一两百毫秒，只放内存的话每次冷启动划列表都会卡，所以落盘。
+    static let posters: URL = {
+        let url = documents.appendingPathComponent("Posters", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
     static let libraryFile = documents.appendingPathComponent("library.json")
 
     static func url(for asset: Asset) -> URL {
         media.appendingPathComponent(asset.fileName)
+    }
+
+    static func poster(for assetID: UUID) -> URL {
+        posters.appendingPathComponent("\(assetID.uuidString).jpg")
     }
 }
 
@@ -33,6 +45,7 @@ final class LibraryStore {
     private(set) var library = Library()
 
     nonisolated static func fileURL(for asset: Asset) -> URL { Paths.url(for: asset) }
+    nonisolated static func posterURL(for assetID: UUID) -> URL { Paths.poster(for: assetID) }
 
     // MARK: 生命周期
 
@@ -346,6 +359,44 @@ final class LibraryStore {
         return attach(asset, to: folderID) ? asset : nil
     }
 
+    // MARK: 视频
+
+    /// 把一个已经在磁盘上的视频文件搬进媒体库。
+    ///
+    /// 视频不能像图片那样先读成 Data——手机拍的 1 分钟 4K 就有几百 MB，
+    /// 读进内存直接会被系统杀掉。这里只做文件搬移和元信息探测。
+    nonisolated static func persistVideo(from source: URL) async -> Asset? {
+        let ext = source.pathExtension.isEmpty ? "mov" : source.pathExtension.lowercased()
+        let fileName = "\(UUID().uuidString).\(ext)"
+        let target = Paths.media.appendingPathComponent(fileName)
+
+        do {
+            // 先试移动。同卷内是改目录项，不复制字节，几百 MB 也是瞬间完成。
+            // 跨卷（临时目录常常和 Documents 不同卷）会失败，再退回复制。
+            do { try FileManager.default.moveItem(at: source, to: target) }
+            catch { try FileManager.default.copyItem(at: source, to: target) }
+        } catch {
+            return nil
+        }
+
+        let info = await VideoProbe.inspect(target)
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int) ?? 0
+
+        return Asset(fileName: fileName,
+                     kind: .video,
+                     width: info.width,
+                     height: info.height,
+                     byteCount: bytes ?? 0,
+                     duration: info.duration)
+    }
+
+    @discardableResult
+    func addVideo(from source: URL, to folderID: UUID) async -> Asset? {
+        guard folder(folderID) != nil else { return nil }
+        guard let asset = await LibraryStore.persistVideo(from: source) else { return nil }
+        return attach(asset, to: folderID) ? asset : nil
+    }
+
     func deleteAssets(_ ids: Set<UUID>, from folderID: UUID) {
         guard !ids.isEmpty, let (gi, fi) = locate(folder: folderID) else { return }
         let removed = library.groups[gi].folders[fi].assets.filter { ids.contains($0.id) }
@@ -367,6 +418,10 @@ final class LibraryStore {
 
     private func removeFile(_ asset: Asset) {
         try? FileManager.default.removeItem(at: Paths.url(for: asset))
+        // 视频的封面是单独落盘的，不一起删就会留一堆没人认领的 jpg
+        if asset.isVideo {
+            try? FileManager.default.removeItem(at: Paths.poster(for: asset.id))
+        }
         ThumbnailCache.shared.invalidate(asset.id)
     }
 

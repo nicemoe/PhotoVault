@@ -45,9 +45,9 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 
-	<!-- 从系统相册导入图片 -->
+	<!-- 从系统相册导入照片和视频 -->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>需要访问相册，才能把你选中的照片导入到这个 App 的目录中。</string>
+	<string>需要访问相册，才能把你选中的照片和视频导入到这个 App 的目录中。</string>
 
 	<!-- WiFi 上传：在局域网内开一个 HTTP 服务 -->
 	<key>NSLocalNetworkUsageDescription</key>

@@ -44,8 +44,18 @@ struct PhotoViewer: View {
                 ForEach(live) { asset in
                     // 单击切换工具栏的手势挂在图片上，不能挂在外层 ZStack：
                     // 挂外层会盖住上下两条栏，把分享、删除这些按钮的点击吞掉。
-                    ZoomableImage(asset: asset) {
-                        withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+                    Group {
+                        if asset.isVideo {
+                            // 只给当前这一页装播放器：TabView 会预建左右相邻页，
+                            // 每页都挂一个 AVPlayer 的话会同时开好几路解码
+                            VideoPage(asset: asset,
+                                      isCurrent: asset.id == currentID,
+                                      onTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } })
+                        } else {
+                            ZoomableImage(asset: asset) {
+                                withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
+                            }
+                        }
                     }
                     .tag(Optional(asset.id))
                 }
@@ -80,7 +90,8 @@ struct PhotoViewer: View {
             isPlaying = false
             UIApplication.shared.isIdleTimerDisabled = wifi.isRunning
         }
-        .confirmationDialog("删除这张照片？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+        .confirmationDialog(current?.isVideo == true ? "删除这个视频？" : "删除这张照片？",
+                            isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 guard let asset = current, let position else { return }
                 // 先选好删完之后要停在哪一张：优先下一张，没有就上一张
@@ -169,7 +180,9 @@ struct PhotoViewer: View {
                 VStack(spacing: 2) {
                     Text("\(asset.width) × \(asset.height)")
                         .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    Text(byteText(asset.byteCount))
+                    Text(asset.isVideo
+                         ? "\(asset.durationText) · \(byteText(asset.byteCount))"
+                         : byteText(asset.byteCount))
                         .font(.system(size: 11))
                         .opacity(0.7)
                 }

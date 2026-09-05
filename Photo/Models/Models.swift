@@ -3,18 +3,64 @@ import UIKit   // AppTheme 要用 UIUserInterfaceStyle
 
 // MARK: - 图片
 
+enum AssetKind: String, Codable, Hashable {
+    case image
+    case video
+}
+
 struct Asset: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     /// 存放在 Documents/Media/ 下的文件名
     var fileName: String
+    var kind: AssetKind = .image
     var width: Int = 0
     var height: Int = 0
     var byteCount: Int = 0
+    /// 视频时长（秒）；图片是 0
+    var duration: Double = 0
     var createdAt: Date = Date()
+
+    init(id: UUID = UUID(), fileName: String, kind: AssetKind = .image,
+         width: Int = 0, height: Int = 0, byteCount: Int = 0,
+         duration: Double = 0, createdAt: Date = Date()) {
+        self.id = id
+        self.fileName = fileName
+        self.kind = kind
+        self.width = width
+        self.height = height
+        self.byteCount = byteCount
+        self.duration = duration
+        self.createdAt = createdAt
+    }
+
+    /// 同 Folder，必须手写解码：旧的 library.json 里没有 kind 和 duration，
+    /// 合成的 Decodable 会因为缺键直接抛错，整个库读不出来。
+    /// 旧数据解出来 kind 全是 image，正好是升级前的样子。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        fileName = try c.decodeIfPresent(String.self, forKey: .fileName) ?? ""
+        kind = try c.decodeIfPresent(AssetKind.self, forKey: .kind) ?? .image
+        width = try c.decodeIfPresent(Int.self, forKey: .width) ?? 0
+        height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0
+        byteCount = try c.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
+        duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    }
+
+    var isVideo: Bool { kind == .video }
 
     var aspectRatio: CGFloat {
         guard width > 0, height > 0 else { return 1 }
         return CGFloat(width) / CGFloat(height)
+    }
+
+    /// 0:07 / 1:23 / 1:02:03
+    var durationText: String {
+        let total = max(0, Int(duration.rounded()))
+        let s = total % 60, m = (total / 60) % 60, h = total / 3600
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s)
+                     : String(format: "%d:%02d", m, s)
     }
 }
 

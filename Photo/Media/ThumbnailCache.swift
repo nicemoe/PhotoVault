@@ -30,27 +30,62 @@ final class ThumbnailCache: @unchecked Sendable {
     /// 异步生成缩略图
     func thumbnail(for asset: Asset, maxPixel: Int) async -> UIImage? {
         if let hit = cached(asset, maxPixel: maxPixel) { return hit }
-        let url = LibraryStore.fileURL(for: asset)
+
         let id = asset.id
-        let image = await Task.detached(priority: .userInitiated) {
-            Self.downsample(url: url, maxPixel: maxPixel)
-        }.value
+        let image: UIImage?
+        if asset.isVideo {
+            image = await videoPoster(for: asset, maxPixel: maxPixel)
+        } else {
+            let url = LibraryStore.fileURL(for: asset)
+            image = await Task.detached(priority: .userInitiated) {
+                Self.downsample(url: url, maxPixel: maxPixel)
+            }.value
+        }
         guard let image else { return nil }
         store(image, id: id, maxPixel: maxPixel)
         return image
     }
 
+    /// 视频封面：先看磁盘上有没有抽好的，没有再抽一帧存下来。
+    /// 抽帧要一两百毫秒，不落盘的话每次冷启动划列表都会卡。
+    private func videoPoster(for asset: Asset, maxPixel: Int) async -> UIImage? {
+        let posterURL = LibraryStore.posterURL(for: asset.id)
+
+        if let data = try? Data(contentsOf: posterURL),
+           let cached = UIImage(data: data) {
+            // 存的那张比要的还小就不能用，宁可重抽一次
+            if max(cached.size.width, cached.size.height) >= CGFloat(maxPixel) - 1 {
+                return Self.downsample(data: data, maxPixel: maxPixel) ?? cached
+            }
+        }
+
+        // 统一按一个较大的尺寸抽，各处再各自降采样，避免同一个视频抽好几遍
+        let posterSide = 720
+        guard let full = await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
+                                                 maxPixel: posterSide) else { return nil }
+        if let jpeg = full.jpegData(compressionQuality: 0.82) {
+            try? jpeg.write(to: posterURL, options: .atomic)
+            return Self.downsample(data: jpeg, maxPixel: maxPixel) ?? full
+        }
+        return full
+    }
+
     /// 服务端用：直接拿到 JPEG 数据
     func thumbnailData(for asset: Asset, maxPixel: Int, quality: CGFloat = 0.82) -> Data? {
-        let image: UIImage
         if let hit = cached(asset, maxPixel: maxPixel) {
-            image = hit
-        } else {
-            guard let made = Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel) else { return nil }
-            store(made, id: asset.id, maxPixel: maxPixel)
-            image = made
+            return hit.jpegData(compressionQuality: quality)
         }
-        return image.jpegData(compressionQuality: quality)
+        if asset.isVideo {
+            // 服务端是同步接口，抽帧是异步的，只用磁盘上抽好的那张。
+            // 还没抽过就先不给图，等 App 里滑到它、抽完落盘后自然就有了。
+            guard let data = try? Data(contentsOf: LibraryStore.posterURL(for: asset.id)) else { return nil }
+            guard let image = Self.downsample(data: data, maxPixel: maxPixel) else { return data }
+            store(image, id: asset.id, maxPixel: maxPixel)
+            return image.jpegData(compressionQuality: quality)
+        }
+        guard let made = Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel) else { return nil }
+        store(made, id: asset.id, maxPixel: maxPixel)
+        return made.jpegData(compressionQuality: quality)
     }
 
     private func store(_ image: UIImage, id: UUID, maxPixel: Int) {
@@ -81,6 +116,16 @@ final class ThumbnailCache: @unchecked Sendable {
     static func downsample(url: URL, maxPixel: Int) -> UIImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        return downsample(source: source, maxPixel: maxPixel)
+    }
+
+    static func downsample(data: Data, maxPixel: Int) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
+        return downsample(source: source, maxPixel: maxPixel)
+    }
+
+    private static func downsample(source: CGImageSource, maxPixel: Int) -> UIImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
