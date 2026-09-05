@@ -7,7 +7,7 @@ name: 构建 IPA
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [main, master, dev, book]
     tags: ['v*']
   pull_request:
   workflow_dispatch:

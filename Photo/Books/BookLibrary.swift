@@ -28,6 +28,8 @@ private struct BookIndex: Codable {
     var settings = ReaderSettings()
     /// 书架布局是书架的偏好，不属于阅读设置，所以单独放一层
     var shelfLayout: ShelfLayout = .grid
+    /// 全局外观。原来在相册那边的数据仓库里，拆成独立 App 后归到这儿。
+    var appearance: AppTheme = .system
 
     init() {}
 
@@ -36,9 +38,10 @@ private struct BookIndex: Codable {
         books = try c.decodeIfPresent([Book].self, forKey: .books) ?? []
         settings = try c.decodeIfPresent(ReaderSettings.self, forKey: .settings) ?? ReaderSettings()
         shelfLayout = try c.decodeIfPresent(ShelfLayout.self, forKey: .shelfLayout) ?? .grid
+        appearance = try c.decodeIfPresent(AppTheme.self, forKey: .appearance) ?? .system
     }
 
-    enum CodingKeys: String, CodingKey { case books, settings, shelfLayout }
+    enum CodingKeys: String, CodingKey { case books, settings, shelfLayout, appearance }
 }
 
 @MainActor
@@ -50,6 +53,9 @@ final class BookLibrary {
         didSet { scheduleSave() }
     }
     var shelfLayout: ShelfLayout = .grid {
+        didSet { scheduleSave() }
+    }
+    var appearance: AppTheme = .system {
         didSet { scheduleSave() }
     }
 
@@ -68,13 +74,14 @@ final class BookLibrary {
         books = index.books
         settings = index.settings
         shelfLayout = index.shelfLayout
+        appearance = index.appearance
     }
 
     private var saveTask: Task<Void, Never>?
 
     private func scheduleSave() {
         saveTask?.cancel()
-        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout)
+        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout, appearance: appearance)
         saveTask = Task { [snapshot] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -84,7 +91,7 @@ final class BookLibrary {
 
     func saveNow() {
         saveTask?.cancel()
-        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout)
+        let snapshot = BookIndex.make(books: books, settings: settings, shelfLayout: shelfLayout, appearance: appearance)
         Task.detached(priority: .utility) { await Self.write(snapshot) }
     }
 
@@ -307,11 +314,13 @@ final class BookLibrary {
 }
 
 private extension BookIndex {
-    static func make(books: [Book], settings: ReaderSettings, shelfLayout: ShelfLayout) -> BookIndex {
+    static func make(books: [Book], settings: ReaderSettings,
+                     shelfLayout: ShelfLayout, appearance: AppTheme) -> BookIndex {
         var index = BookIndex()
         index.books = books
         index.settings = settings
         index.shelfLayout = shelfLayout
+        index.appearance = appearance
         return index
     }
 }

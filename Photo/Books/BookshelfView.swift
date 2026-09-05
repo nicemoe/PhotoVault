@@ -39,7 +39,6 @@ struct BookshelfView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     if library.books.isEmpty {
                         EmptyState(
-                            icon: "books.vertical",
                             title: "书架是空的",
                             message: "支持 TXT 和 EPUB。\n可以从「文件」导入，也可以用 WiFi 上传。",
                             actionTitle: "从文件导入"
@@ -48,8 +47,7 @@ struct BookshelfView: View {
                         }
                         .padding(.top, 40)
                     } else if visibleBooks.isEmpty {
-                        EmptyState(icon: "magnifyingglass",
-                                   title: "没有匹配的书",
+                        EmptyState(title: "没有匹配的书",
                                    message: "试试书名或作者的其他关键词")
                             .padding(.top, 40)
                     } else if library.shelfLayout == .grid {
@@ -89,24 +87,29 @@ struct BookshelfView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 0) {
-                    layoutMenu
-                    Menu {
-                        Button {
-                            showImporter = true
-                        } label: {
-                            Label("从文件导入", systemImage: "folder")
-                        }
-                        Divider()
+                ToolbarItem(placement: .topBarLeading) {
+                    if wifi.isRunning {
                         Button {
                             showWiFi = true
                         } label: {
-                            Label("WiFi 上传", systemImage: "wifi")
+                            HStack(spacing: 5) {
+                                Circle().fill(Color(hex: 0x2FBF5B)).frame(width: 6, height: 6)
+                                Text("传输中")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                            }
+                            .foregroundStyle(Theme.secondaryLabel)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Theme.fill, in: Capsule())
                         }
-                    } label: {
-                        Image(systemName: "plus").circleIcon()
                     }
+                }
+                // 两个按钮放进同一个 ToolbarItem 里用 HStack 摆，间距才可控；
+                // 交给 ToolbarItemGroup 排的话由系统决定，会偏大。
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 0) {
+                        addMenu
+                        pageMenu
                     }
                 }
             }
@@ -158,21 +161,64 @@ struct BookshelfView: View {
         .toast($toastItem)
     }
 
-    /// 用菜单 + 对勾而不是单键切换：两种布局的图标谁代表「当前」谁代表
-    /// 「点了会变成」很容易读反，菜单里打勾没有歧义。和相册页排序菜单同一个模式。
-    private var layoutMenu: some View {
+    private var addMenu: some View {
         Menu {
-            Picker("", selection: Binding(
-                get: { library.shelfLayout },
-                set: { library.shelfLayout = $0 }
-            )) {
-                ForEach(ShelfLayout.allCases) { item in
-                    Label(item.title, systemImage: item.icon).tag(item)
-                }
+            Button {
+                showImporter = true
+            } label: {
+                Label("从文件导入", systemImage: "folder")
             }
-            .pickerStyle(.inline)
+
+            Divider()
+
+            Button {
+                showWiFi = true
+            } label: {
+                Label("WiFi 上传", systemImage: "wifi")
+            }
         } label: {
-            Image(systemName: library.shelfLayout.icon).circleIcon(glyph: 12.5)
+            // 加号用 light：默认字重的一横一竖比旁边的三条杠粗一圈，摆一起不齐
+            Image(systemName: "plus").circleIcon(glyph: 17, weight: .light)
+        }
+    }
+
+    /// 三条杠：书架布局 + 外观。
+    ///
+    /// 布局用菜单 + 对勾而不是单键切换：两种布局的图标谁代表「当前」谁代表
+    /// 「点了会变成」很容易读反，菜单里打勾没有歧义。
+    private var pageMenu: some View {
+        @Bindable var library = library
+
+        return Menu {
+            Menu {
+                Picker("", selection: $library.shelfLayout) {
+                    ForEach(ShelfLayout.allCases) { item in
+                        Label(item.title, systemImage: item.icon).tag(item)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label(library.shelfLayout.title, systemImage: library.shelfLayout.icon)
+            }
+
+            Divider()
+
+            // 外观作为一个条目收在这里，点开才是三个选项。
+            // 一级条目直接显示当前选中的值（跟随系统 / 浅色 / 深色），
+            // 不要再加「外观」前缀——展开后的对勾已经说明了它是什么。
+            Menu {
+                Picker("", selection: $library.appearance) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Label(theme.title, systemImage: theme.icon).tag(theme)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label(library.appearance.title, systemImage: library.appearance.icon)
+            }
+        } label: {
+            // 三条杠是自己画的，宽度/线宽/行距各自独立可调，见 HamburgerIcon
+            HamburgerIcon().circleIcon()
         }
     }
 

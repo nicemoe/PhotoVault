@@ -56,8 +56,7 @@ struct ChapterListSheet: View {
         let marks = library.bookmarks(bookID: book.id)
         return Group {
             if marks.isEmpty {
-                EmptyState(icon: "bookmark",
-                           title: "还没有书签",
+                EmptyState(title: "还没有书签",
                            message: "阅读时点右上角的书签图标，就能把当前这页记下来")
             } else {
                 List {
@@ -154,8 +153,7 @@ struct BookSearchSheet: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if hits.isEmpty {
-                    EmptyState(icon: "text.magnifyingglass",
-                               title: searched ? "没有找到" : "搜索全书",
+                    EmptyState(title: searched ? "没有找到" : "搜索全书",
                                message: searched ? "换个词试试" : "输入关键词，会在所有章节里查找")
                 } else {
                     List(hits) { hit in

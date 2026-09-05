@@ -57,16 +57,15 @@ struct WiFiTransferView: View {
                     Text("WiFi 上传未开启")
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(Theme.label)
-                    Text("开启后，同一 WiFi 下的电脑或手机\n用浏览器就能管理分组、上传图片")
+                    Text("开启后，同一 WiFi 下的电脑或手机\n用浏览器就能上传小说、管理书架")
                         .font(.system(size: 13.5))
                         .foregroundStyle(Theme.secondaryLabel)
                         .multilineTextAlignment(.center)
                         .lineSpacing(2)
                 }
-                Button("开启 WiFi 上传") {
+                actionIcon("power", tint: Theme.accent, filled: true, label: "开启 WiFi 上传") {
                     Task { await wifi.start() }
                 }
-                .buttonStyle(PrimaryButtonStyle())
 
             case .starting:
                 iconBadge("wifi", tint: Theme.accent)
@@ -115,10 +114,9 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                 }
 
-                Button("停止服务") {
+                actionIcon("power", tint: Theme.danger, label: "停止服务") {
                     wifi.stop()
                 }
-                .buttonStyle(SecondaryButtonStyle())
 
             case .failed(let message):
                 iconBadge("exclamationmark.triangle", tint: Theme.danger)
@@ -131,15 +129,35 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                         .multilineTextAlignment(.center)
                 }
-                Button("重试") {
+                actionIcon("arrow.clockwise", tint: Theme.accent, filled: true, label: "重试") {
                     Task { await wifi.start() }
                 }
-                .buttonStyle(PrimaryButtonStyle())
             }
         }
         .frame(maxWidth: .infinity)
         .padding(22)
         .flatCard()
+    }
+
+    /// 卡片里的动作按钮：只有图标，不做成带文案的方块。
+    /// 上面的标题和说明已经把要干什么讲清楚了。
+    ///
+    /// 用电源符号而不是播放三角：▶ 的意思是「播放媒体」，用来表示
+    /// 「启动服务」对不上；而且三角形的视觉重心偏左，摆进圆里天生看着不居中。
+    /// filled 用于主操作，实心圆更像个可以按下去的东西。
+    private func actionIcon(_ name: String, tint: Color, filled: Bool = false,
+                            label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(filled ? Color.white : tint)
+                .frame(width: 58, height: 58)
+                .background(filled ? AnyShapeStyle(tint) : AnyShapeStyle(tint.opacity(0.12)),
+                            in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func iconBadge(_ name: String, tint: Color) -> some View {
@@ -197,7 +215,7 @@ struct WiFiTransferView: View {
 
             step(1, "让电脑和手机连同一个 WiFi", "两台设备必须在同一个局域网内")
             step(2, "浏览器打开上面的地址", "或用另一台手机扫描二维码")
-            step(3, "在网页里管理并上传", "可新建分组、新建目录、移动目录，把图片拖进网页就能传到 App")
+            step(3, "在网页里上传", "把 TXT 或 EPUB 拖进网页就能传到 App，一次可以拖多本")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)

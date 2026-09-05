@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>百宝箱</string>
+	<string>阅读器</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -35,23 +35,18 @@
 		<false/>
 	</dict>
 
+	<!-- 阅读器只做竖排版，横屏没有对应的排版逻辑，直接锁竖屏 -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 
-	<!-- 从系统相册导入图片 -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>需要访问相册，才能把你选中的照片导入到这个 App 的目录中。</string>
-
 	<!-- WiFi 上传：在局域网内开一个 HTTP 服务 -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>开启 WiFi 上传后，需要在局域网内提供网页服务，让同一 WiFi 下的设备可以上传图片。</string>
+	<string>开启 WiFi 上传后，需要在局域网内提供网页服务，让同一 WiFi 下的设备可以上传小说。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_http._tcp</string>

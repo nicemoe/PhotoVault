@@ -44,209 +44,36 @@ enum ScreenMetrics {
 /// 由容器宽度推出卡片网格的列数与边长
 struct CardGridLayout {
     var columnCount: Int
+    /// 单元格的估算边长，只用来给缩略图挑分辨率，不用来定尺寸
     var side: CGFloat
     var columns: [GridItem]
 
     /// - Parameter preferredItemWidth: 单个卡片的理想宽度，用来决定列数
     init(contentWidth: CGFloat, gap: CGFloat, preferredItemWidth: CGFloat, minimumColumns: Int = 2) {
         let count = max(minimumColumns, Int((contentWidth + gap) / (preferredItemWidth + gap)))
-        let total = contentWidth - gap * CGFloat(count - 1)
-        columnCount = count
-        side = max(1, total / CGFloat(count))
-        columns = Array(repeating: GridItem(.fixed(side), spacing: gap), count: count)
+        self.init(contentWidth: contentWidth, gap: gap, fixedColumns: count)
     }
 
     /// 固定列数（照片墙用）
     init(contentWidth: CGFloat, gap: CGFloat, fixedColumns: Int) {
-        let total = contentWidth - gap * CGFloat(fixedColumns - 1)
-        columnCount = fixedColumns
-        side = max(1, total / CGFloat(fixedColumns))
-        columns = Array(repeating: GridItem(.fixed(side), spacing: gap), count: fixedColumns)
-    }
-}
-
-// MARK: - 异步缩略图
-
-struct AssetImage: View {
-    let asset: Asset
-    var maxPixel: Int = 480
-    var contentMode: ContentMode = .fill
-
-    @State private var image: UIImage?
-
-    var body: some View {
-        // 用 overlay 而不是 ZStack：填充模式下图片会溢出，
-        // overlay 不参与父视图定尺，外层 clipped 才能真正裁掉多出来的部分。
-        Theme.fill
-            .overlay {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: contentMode)
-                }
-            }
-            .clipped()
-            .task(id: asset.id) {
-                if let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel) {
-                    image = hit
-                    return
-                }
-                let loaded = await ThumbnailCache.shared.thumbnail(for: asset, maxPixel: maxPixel)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.18)) { image = loaded }
-            }
-    }
-}
-
-// MARK: - 封面拼贴
-
-struct CoverCollage: View {
-    let assets: [Asset]
-    var tint: Color = Theme.accent
-    var emptyIcon: String = "photo.on.rectangle.angled"
-    var maxPixel: Int = 480
-
-    private let gap: CGFloat = 2
-
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-
-            switch assets.count {
-            case 0:
-                ZStack {
-                    tint.opacity(0.12)
-                    Image(systemName: emptyIcon)
-                        .font(.system(size: min(w, h) * 0.26, weight: .regular))
-                        .foregroundStyle(tint.opacity(0.55))
-                }
-            case 1:
-                AssetImage(asset: assets[0], maxPixel: maxPixel)
-            case 2:
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: (w - gap) / 2)
-                    AssetImage(asset: assets[1], maxPixel: maxPixel).frame(width: (w - gap) / 2)
-                }
-            case 3:
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: w * 0.62 - gap)
-                    VStack(spacing: gap) {
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(height: (h - gap) / 2)
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(height: (h - gap) / 2)
-                    }
-                }
-            default:
-                VStack(spacing: gap) {
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[0], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(width: (w - gap) / 2)
-                    }
-                    .frame(height: (h - gap) / 2)
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[3], maxPixel: 320).frame(width: (w - gap) / 2)
-                    }
-                    .frame(height: (h - gap) / 2)
-                }
-            }
-        }
-        .background(Theme.fill)
-    }
-}
-
-// MARK: - 分组卡片
-
-struct GroupCard: View {
-    let group: PhotoGroup
-    let side: CGFloat
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: group.coverAssets, tint: Theme.color(at: group.colorIndex))
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
-                .overlay(alignment: .topLeading) {
-                    Circle()
-                        .fill(Theme.color(at: group.colorIndex))
-                        .frame(width: 10, height: 10)
-                        .padding(10)
-                        .background(
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                                .frame(width: 26, height: 26)
-                        )
-                        .padding(8)
-                }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(group.name)
-                    .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(Theme.label)
-                    .lineLimit(1)
-
-                Text("\(group.folderCount) 个目录 · \(group.photoCount) 张")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Theme.secondaryLabel)
-                    .lineLimit(1)
-            }
-            .frame(width: side, alignment: .leading)
-            .padding(.top, 10)
-        }
-        .frame(width: side)
-    }
-}
-
-// MARK: - 目录卡片
-
-struct FolderCard: View {
-    let folder: Folder
-    let side: CGFloat
-    var tint: Color = Theme.accent
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: folder.coverAssets, tint: tint, emptyIcon: "folder")
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(folder.name)
-                    .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(Theme.label)
-                    .lineLimit(1)
-
-                Text("\(folder.photoCount) 张照片")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Theme.secondaryLabel)
-            }
-            .frame(width: side, alignment: .leading)
-            .padding(.top, 10)
-        }
-        .frame(width: side)
+        let count = max(1, fixedColumns)
+        let total = contentWidth - gap * CGFloat(count - 1)
+        columnCount = count
+        side = max(1, total / CGFloat(count))
+        columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: count)
     }
 }
 
 // MARK: - 空状态
 
 struct EmptyState: View {
-    let icon: String
     let title: String
     let message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Theme.accent.opacity(0.12))
-                    .frame(width: 84, height: 84)
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .regular))
-                    .foregroundStyle(Theme.accent)
-            }
-
+        VStack(spacing: 16) {
             VStack(spacing: 6) {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
@@ -258,71 +85,26 @@ struct EmptyState: View {
                     .lineSpacing(2)
             }
 
-            if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .frame(width: 200)
-                    .padding(.top, 4)
+            // 一个大加号，不做成按钮：上面的文字已经说清楚要干什么了，
+            // 再套一个写着同样话的方块只是把一句话说两遍。
+            if let action {
+                Button(action: action) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 56, height: 56)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(actionTitle ?? "添加")
             }
         }
         .padding(.horizontal, 40)
-        .padding(.vertical, 48)
-        .frame(maxWidth: .infinity)
+        // 撑出一块高度再居中，文字和加号才落在这块空白的正中，
+        // 而不是贴着上一块内容
+        .frame(maxWidth: .infinity, minHeight: 360, alignment: .center)
     }
 }
-
-// MARK: - 排序菜单
-
-struct SortMenu: View {
-    @Binding var mode: SortMode
-    var onManualReorder: () -> Void
-
-    var body: some View {
-        Menu {
-            Picker("排序方式", selection: $mode) {
-                ForEach(SortMode.allCases) { m in
-                    Label(m.title, systemImage: m.icon).tag(m)
-                }
-            }
-            Divider()
-            Button {
-                onManualReorder()
-            } label: {
-                Label("手动调整顺序…", systemImage: "arrow.up.arrow.down.square")
-            }
-        } label: {
-            // 这个字形是左右并排两个箭头，比 plus 宽得多，字号要相应压小
-            Image(systemName: "arrow.up.arrow.down").circleIcon(glyph: 11.5)
-        }
-    }
-}
-
-// MARK: - 顶部统计条
-
-struct StatBar: View {
-    let items: [(String, String)]
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.0)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.label)
-                    Text(item.1)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.secondaryLabel)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 14)
-                .flatCard(radius: 16)
-            }
-        }
-    }
-}
-
-// MARK: - 轻提示
 
 struct Toast: Equatable, Identifiable {
     let id = UUID()

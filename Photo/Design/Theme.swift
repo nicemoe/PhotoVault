@@ -162,10 +162,11 @@ struct CircleIconLook: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .font(.system(size: glyphSize, weight: glyphWeight))
+            // 字号放大一档：没有圆底衬着，原来的尺寸看着偏小
+            .font(.system(size: glyphSize + 2, weight: glyphWeight))
             .foregroundStyle(Theme.accent)
-            .frame(width: diameter, height: diameter)
-            .background(Theme.accent.opacity(0.12), in: Circle())
+            // 不再画圆底。导航栏上并排几个圆点显得碎，
+            // 光图标本身就够清楚了；点击区域仍按 hitSize 留足。
             .frame(width: hitSize, height: hitSize)
             .contentShape(Rectangle())
     }
@@ -198,32 +199,6 @@ struct HamburgerIcon: View {
             }
         }
         // Capsule 默认用 foregroundStyle 填充，颜色由 circleIcon 统一给
-    }
-}
-
-/// 主要操作按钮：实色块、无渐变
-struct PrimaryButtonStyle: ButtonStyle {
-    var tint: Color = Theme.accent
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(tint.opacity(configuration.isPressed ? 0.82 : 1), in: RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
-    }
-}
-
-/// 次要操作按钮：填充灰块
-struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Theme.label)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(Theme.fill.opacity(configuration.isPressed ? 0.7 : 1), in: RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
     }
 }
 
