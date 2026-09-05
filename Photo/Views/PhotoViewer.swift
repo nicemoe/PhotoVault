@@ -18,7 +18,6 @@ struct PhotoViewer: View {
     @State private var showChrome = true
     @State private var showDeleteConfirm = false
     @State private var isPlaying = false
-    @State private var isLandscape = false
     /// 横竖屏切换会把播放页整个重建，用这两个把进度接上
     @State private var resumeAsset: UUID?
     @State private var resumeTime: Double = 0
@@ -49,23 +48,30 @@ struct PhotoViewer: View {
 
     private var controlTint: Color { onDarkSurface ? .white : Theme.viewerLabel }
 
-    /// 横屏 + 当前是视频 = 全屏播放姿势
-    private var isLandscapeVideo: Bool { isLandscape && onDarkSurface }
-
     var body: some View {
+        GeometryReader { proxy in
+            viewer(landscape: proxy.size.width > proxy.size.height)
+        }
+        .ignoresSafeArea()
+    }
+
+    private func viewer(landscape: Bool) -> some View {
         let live = liveAssets
         let current = live.first { $0.id == currentID } ?? live.first
         let position = live.firstIndex { $0.id == current?.id }
+        let landscapeVideo = landscape && onDarkSurface
 
-        ZStack {
+        return ZStack {
             (onDarkSurface ? Color.black : Theme.viewerBackground).ignoresSafeArea()
 
-            if isLandscapeVideo, let asset = current, asset.isVideo {
-                // 横屏走全屏播放，不套 TabView。
+            if let asset = current, asset.isVideo {
+                // 视频一律不进 TabView，横竖屏都一样。
                 //
-                // TabView 的分页容器不会把 ignoresSafeArea 传给页面内容，
-                // 在页面里再声明也压不住外面那层，画面上下就铺不满。
-                // 顺带也没有翻页手势来抢横向拖动了。
+                // TabView 的分页容器会把页面内容缩小（不传 ignoresSafeArea），
+                // 还会裁掉溢出的部分，而且它的翻页手势由内部的 UIScrollView
+                // 负责，SwiftUI 压不住——画面铺不满、横拖快进被抢，都出在这儿。
+                // 与其一处处去猜是哪层缩了它，不如让视频页直接对着窗口铺。
+                // 换上一个/下一个用底部的传输键。
                 videoPage(for: asset, in: live)
                     .ignoresSafeArea()
             } else {
@@ -104,11 +110,6 @@ struct PhotoViewer: View {
                 }
                 .transition(.opacity)
             }
-        }
-        .onGeometryChange(for: Bool.self) { proxy in
-            proxy.size.width > proxy.size.height
-        } action: { landscape in
-            isLandscape = landscape
         }
         // 看视频时状态栏一律收起：播放页有自己的顶栏，两条叠着占地方
         .statusBarHidden(!showChrome || onDarkSurface)

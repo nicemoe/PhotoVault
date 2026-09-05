@@ -21,6 +21,62 @@ enum ScreenOrientation {
     }
 }
 
+/// 自己接管单击和双击。
+///
+/// SwiftUI 里同时写 .onTapGesture(count: 2) 和 .onTapGesture 的话，
+/// 它会自动给单击加一条「等双击失败」的依赖——单击要等约 300ms 才派发，
+/// 点一下屏幕半天没反应就是这么来的。
+///
+/// UIKit 这边不加 require(toFail:)，单击立刻响应。双击时两个单击回调也会
+/// 各来一次，但单击只是开合工具栏，来两次正好抵消，看不出来。
+struct TapCatcher: UIViewRepresentable {
+
+    var enabled = true
+    var onSingle: () -> Void
+    var onDouble: (CGPoint) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let single = UITapGestureRecognizer(target: context.coordinator,
+                                            action: #selector(Coordinator.handleSingle(_:)))
+        let double = UITapGestureRecognizer(target: context.coordinator,
+                                            action: #selector(Coordinator.handleDouble(_:)))
+        double.numberOfTapsRequired = 2
+        // 不设 single.require(toFail: double) —— 那正是延迟的来源
+        for recognizer in [single, double] {
+            recognizer.cancelsTouchesInView = false
+            view.addGestureRecognizer(recognizer)
+        }
+        context.coordinator.update(self)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.update(self)
+        view.isUserInteractionEnabled = enabled
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        private var onSingle: () -> Void = {}
+        private var onDouble: (CGPoint) -> Void = { _ in }
+
+        func update(_ view: TapCatcher) {
+            onSingle = view.onSingle
+            onDouble = view.onDouble
+        }
+
+        @objc func handleSingle(_ gesture: UITapGestureRecognizer) { onSingle() }
+
+        @objc func handleDouble(_ gesture: UITapGestureRecognizer) {
+            onDouble(gesture.location(in: gesture.view))
+        }
+    }
+}
+
 /// 承载 AVPlayerLayer 的裸视图。
 ///
 /// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
@@ -40,18 +96,6 @@ final class PlayerHostView: UIView {
         set { playerLayer.videoGravity = newValue }
     }
 
-    /// 是否允许外层相册左右翻页。
-    ///
-    /// 横屏快进要横向拖，而 TabView 的翻页是它内部那个 UIScrollView 在做。
-    /// SwiftUI 的手势优先级管不到祖先视图的 UIKit 手势——用
-    /// simultaneousGesture 就是两个一起响应，画面会跟着横移；
-    /// 用 highPriorityGesture 也只压得住子视图。只能直接把它关掉。
-    var pagingEnabled = true {
-        didSet { pager?.isScrollEnabled = pagingEnabled }
-    }
-
-    private weak var pager: UIScrollView?
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         playerLayer.videoGravity = .resizeAspect
@@ -63,35 +107,10 @@ final class PlayerHostView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        guard window != nil else { return }
-        var view: UIView? = superview
-        while let current = view {
-            if let scroll = current as? UIScrollView { pager = scroll; break }
-            view = current.superview
-        }
-        pager?.isScrollEnabled = pagingEnabled
-    }
-
-    override func willMove(toWindow newWindow: UIWindow?) {
-        super.willMove(toWindow: newWindow)
-        // 离场时一定要还回去，否则整个相册都翻不动了
-        if newWindow == nil { pager?.isScrollEnabled = true }
-    }
-
-    deinit {
-        // deinit 可能不在主线程；捕获引用后回主线程还原
-        if let pager {
-            Task { @MainActor in pager.isScrollEnabled = true }
-        }
-    }
 }
 
 struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer?
-    /// false 表示这一页要独占横向手势（横屏快进）
-    var pagingEnabled = true
     /// 适应（留黑边）还是填充（裁掉溢出的部分）
     var fill = false
 
@@ -100,23 +119,22 @@ struct PlayerLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.player = player
-        view.pagingEnabled = pagingEnabled
         view.gravity = gravity
         return view
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
         if view.player !== player { view.player = player }
-        if view.pagingEnabled != pagingEnabled { view.pagingEnabled = pagingEnabled }
         if view.gravity != gravity { view.gravity = gravity }
     }
 }
 
 /// 预览页里的一段视频。
 ///
-/// 手势分两套，因为竖屏时左右滑要留给相册翻页：
-/// - 竖屏：单击开合工具栏，双击左右 ±10 秒，双指缩放
-/// - 横屏：横向拖动快进快退，左半竖拖调亮度，右半竖拖调音量
+/// 视频页不在 TabView 里，横向手势全归播放器：
+/// 单击开合工具栏，双击左右两侧 ±10 秒，横拖快进快退，
+/// 左半竖拖调亮度、右半竖拖调音量，双指缩放。
+/// 换上一个/下一个用底部的传输键。
 struct VideoPage: View {
 
     let asset: Asset
@@ -177,24 +195,14 @@ struct VideoPage: View {
                 Color.black
 
                 if player != nil {
-                    // 铺满整页，比例交给 AVPlayerLayer 自己按真实画面算。
+                    // 尺寸取窗口和容器里大的那个，比例交给 AVPlayerLayer 自己算。
                     //
-                    // 别拿 asset.width/height 去算一个框套在外面：那个尺寸是导入时
-                    // 探测的，和播放层实际显示的比例只要差一点（像素宽高比、旋转矩阵），
-                    // 播放层就会在这个框里再 fit 一次——两层 fit 叠加，左右会多出一圈
-                    // 永远消不掉的黑边。页面本来就是黑底，它自己留的黑边看不出来。
-                    // 横屏（全屏播放）和放大后都由本页独占横向手势，
-                    // 竖屏没放大时把左右滑还给相册翻页
-                    // 尺寸取窗口，不取容器。
-                    //
-                    // aspect fit 在满屏容器里必定至少铺满一个方向：要么宽受限
-                    // （左右满），要么高受限（上下满）。四边都有黑边只可能是
-                    // 容器本身没满屏——而容器会被各种外层（TabView 的分页、
-                    // 安全区）悄悄缩小，从里面看不出来。直接问窗口要尺寸，
-                    // 就跟外层怎么摆无关了。
-                    PlayerLayerView(player: player,
-                                    pagingEnabled: !(landscape || scale > 1.01),
-                                    fill: fill)
+                    // aspect fit 在满屏容器里必定至少铺满一个方向，所以「四边都
+                    // 有黑边」只可能是容器本身没满屏。别拿 asset.width/height 去
+                    // 算一个框套在外面——那尺寸是导入时探测的，和播放层实际显示
+                    // 的比例差一点，播放层就会在框里再 fit 一次，叠出永远消不掉
+                    // 的黑边。
+                    PlayerLayerView(player: player, fill: fill)
                         .frame(width: max(geo.size.width, windowSize.width),
                                height: max(geo.size.height, windowSize.height))
                         .scaleEffect(scale)
@@ -212,23 +220,17 @@ struct VideoPage: View {
                 // 双击超时（约 300ms）确认你不会再点第二下，DragGesture 也要
                 // 先判定失败，才敢把点击派发下去——按一下暂停要等半秒才动。
                 // 分层之后，按钮的点击直接命中按钮，手势只管画面上的空白处。
-                Color.clear
+                TapCatcher(
+                    enabled: !locked,
+                    onSingle: onSingleTap,
+                    onDouble: { point in handleDoubleTap(at: point, width: geo.size.width) }
+                )
                     .contentShape(Rectangle())
                     .gesture(magnifyGesture, including: locked ? .subviews : .all)
                     // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
                     // 免得和相册翻页抢
                     .gesture(dragGesture(size: geo.size, landscape: landscape),
-                             including: locked ? .subviews : ((scale > 1.01 || landscape) ? .all : .subviews))
-                    // 双击必须写在单击前面，否则单击会先把手势吃掉
-                    .onTapGesture(count: 2, coordinateSpace: .local) { location in
-                        guard !locked else { return }
-                        handleDoubleTap(at: location, width: geo.size.width)
-                    }
-                    .onTapGesture {
-                        // 锁住时单击只负责把解锁键叫出来，不去开合整套工具栏
-                        guard !locked else { return }
-                        onSingleTap()
-                    }
+                             including: locked ? .subviews : .all)
 
                 if unplayable {
                     unplayableNote
@@ -728,9 +730,10 @@ struct VideoPage: View {
             }
     }
 
-    /// 放大后拖动是平移；否则横屏下横拖快进、竖拖调亮度/音量。
+    /// 放大后拖动是平移；否则横拖快进、竖拖调亮度（左半）和音量（右半）。
     ///
-    /// 竖屏不接管横向拖动——那是相册左右翻页用的。竖屏想快进就双击左右两侧。
+    /// 两种方向都接管——视频页已经不在 TabView 里了，左右滑不再是相册翻页，
+    /// 换上一个/下一个用底部的传输键。
     private func dragGesture(size: CGSize, landscape: Bool) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
@@ -739,7 +742,7 @@ struct VideoPage: View {
                                     height: steadyOffset.height + value.translation.height)
                     return
                 }
-                guard landscape, !unplayable else { return }
+                guard !unplayable else { return }
 
                 if dragMode == nil {
                     let horizontal = abs(value.translation.width) > abs(value.translation.height)
