@@ -185,10 +185,18 @@ struct VideoPage: View {
                     // 永远消不掉的黑边。页面本来就是黑底，它自己留的黑边看不出来。
                     // 横屏（全屏播放）和放大后都由本页独占横向手势，
                     // 竖屏没放大时把左右滑还给相册翻页
+                    // 尺寸取窗口，不取容器。
+                    //
+                    // aspect fit 在满屏容器里必定至少铺满一个方向：要么宽受限
+                    // （左右满），要么高受限（上下满）。四边都有黑边只可能是
+                    // 容器本身没满屏——而容器会被各种外层（TabView 的分页、
+                    // 安全区）悄悄缩小，从里面看不出来。直接问窗口要尺寸，
+                    // 就跟外层怎么摆无关了。
                     PlayerLayerView(player: player,
                                     pagingEnabled: !(landscape || scale > 1.01),
                                     fill: fill)
-                        .frame(width: geo.size.width, height: geo.size.height)
+                        .frame(width: max(geo.size.width, windowSize.width),
+                               height: max(geo.size.height, windowSize.height))
                         .scaleEffect(scale)
                         .offset(offset)
                 } else if !unplayable {
@@ -328,6 +336,13 @@ struct VideoPage: View {
         )
     }
 
+    /// 窗口尺寸。容器可能被外层缩小，画面要按这个铺。
+    private var windowSize: CGSize {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.bounds.size }
+            .first ?? .zero
+    }
+
     /// 画面是全屏铺的，控件得自己按窗口的安全区让位
     private var safeInsets: UIEdgeInsets {
         UIApplication.shared.connectedScenes
@@ -371,7 +386,8 @@ struct VideoPage: View {
                     // 只在裁得不多的时候给「铺满」这个选项。
                     // 竖拍视频在横屏下要裁掉 74% 才能铺满，那不叫铺满，
                     // 那是只给你看四分之一。
-                    if cropIfFilled(in: size) <= 0.25 {
+                    if cropIfFilled(in: CGSize(width: max(size.width, windowSize.width),
+                                                height: max(size.height, windowSize.height))) <= 0.25 {
                         Button {
                             withAnimation(.easeOut(duration: 0.2)) { fill.toggle() }
                         } label: {
