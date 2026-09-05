@@ -53,6 +53,8 @@ struct VideoPage: View {
     @State private var duration: Double = 0
     @State private var scrubbing = false
     @State private var observer: Any?
+    /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
+    private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
 
     // 缩放，和图片那边一套参数
     @State private var scale: CGFloat = 1
@@ -62,20 +64,43 @@ struct VideoPage: View {
 
     var body: some View {
         GeometryReader { geo in
+            // 按视频本身的比例给播放层定尺寸。
+            //
+            // 让播放层铺满整屏、由 AVPlayerLayer 自己做 aspect fit 的话，
+            // 多出来的部分是它画的黑边——浅色模式下背景是白的，看着就是
+            // 一块黑挡在中间；缩放时黑边也跟着一起放大。
+            let box = fitted(in: geo.size)
+
             ZStack {
-                Theme.viewerBackground
+                // 视频统一放在黑底上，和主流播放器一致，也让白色控件始终看得清
+                Color.black
 
                 if player != nil {
                     PlayerLayerView(player: player)
+                        .frame(width: box.width, height: box.height)
                         .scaleEffect(scale)
                         .offset(offset)
                 } else {
                     // 播放器还没建好时先摆封面，翻到这一页不至于是一片黑
                     AssetImage(asset: asset, maxPixel: 900)
                         .aspectRatio(contentMode: .fit)
+                        .frame(width: box.width, height: box.height)
                 }
 
-                if chromeVisible {
+                if unplayable {
+                    // 存住了但 iOS 解不了（mkv、rmvb 这些）。
+                    // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
+                    VStack(spacing: 10) {
+                        Image(systemName: "film")
+                            .font(.system(size: 40))
+                        Text("这个格式 iOS 无法播放")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("文件已保存，可以用右下角分享导出")
+                            .font(.system(size: 12))
+                            .opacity(0.7)
+                    }
+                    .foregroundStyle(.white.opacity(0.75))
+                } else if chromeVisible {
                     controls
                         .transition(.opacity)
                 }
@@ -101,6 +126,17 @@ struct VideoPage: View {
             if current { start() } else { stop() }
         }
         .onDisappear { stop() }
+    }
+
+    /// 按视频比例算出在这块区域里的最大尺寸
+    private func fitted(in size: CGSize) -> CGSize {
+        guard size.width > 1, size.height > 1 else { return size }
+        // 元信息缺失时按整块区域算，至少不会缩成一条
+        let ratio = asset.aspectRatio > 0.01 ? asset.aspectRatio : size.width / size.height
+        let byWidth = CGSize(width: size.width, height: size.width / ratio)
+        return byWidth.height <= size.height
+             ? byWidth
+             : CGSize(width: size.height * ratio, height: size.height)
     }
 
     // MARK: 播放控件
@@ -141,9 +177,9 @@ struct VideoPage: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
-            .background(.black.opacity(0.3), in: Capsule())
+            .background(.black.opacity(0.45), in: Capsule())
             .padding(.horizontal, 20)
-            .padding(.bottom, 96)   // 让开底栏
+            .padding(.bottom, 118)   // 让开底栏，别贴着它
         }
     }
 
@@ -156,7 +192,7 @@ struct VideoPage: View {
     // MARK: 播放
 
     private func start() {
-        guard player == nil else { return }
+        guard player == nil, !unplayable else { return }
         // 静音键按下时也要出声——用户是主动点开看的，不是自动播放的广告
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)

@@ -670,15 +670,20 @@ function walkEntry(entry, out, prefix){
 }
 
 /* ---------- 上传 ---------- */
-const IMAGE_EXT = /\.(jpe?g|png|heic|heif|gif|webp|tiff?|bmp)$/i;
-const VIDEO_EXT = /\.(mp4|mov|m4v|3gp|avi|mkv|webm|mpe?g|wmv|flv)$/i;
+// 和手机端 MediaFormats.videoExtensions 保持一致
+const VIDEO_EXT = /\.(mp4|m4v|mov|qt|3gp|3g2|m4p|mts|m2ts|ts|mpe?g|mpe|m2v|mxf|dv|avi|mkv|webm|wmv|asf|flv|f4v|rm|rmvb|vob|ogv|ogm|divx|xvid|amv|m2p)$/i;
+// 图片这边手机端走 ImageIO，它支持什么就认什么，所以列得宽一点，
+// 含各家 RAW；真解不出来的会在服务端被跳过，只是白传一次
+const IMAGE_EXT = /\.(jpe?g|jpe|jfif|png|apng|gif|webp|bmp|dib|tiff?|heic|heif|heics|avci|avif|ico|cur|psd|jp2|j2k|jpf|jpx|jpm|tga|pict|pct|exr|hdr|dng|cr2|cr3|nef|nrw|arw|srf|sr2|raf|orf|rw2|pef|ptx|srw|3fr|erf|mrw|mos|x3f|iiq|k25|kdc|dcr|fff|rwl|mef)$/i;
 
 function isVideoFile(f){
-  return f.type ? f.type.startsWith('video/') : VIDEO_EXT.test(f.name);
+  if(f.type) return f.type.startsWith('video/');
+  return VIDEO_EXT.test(f.name);
 }
 function isMedia(f){
-  if(f.type) return f.type.startsWith('image/') || f.type.startsWith('video/');
-  // 从网上存下来的文件常常没有 type，只能看扩展名
+  // 浏览器给了 type 就信它，同时扩展名也放行——很多从网上存下来的
+  // 文件 type 是空的或者 application/octet-stream
+  if(f.type && (f.type.startsWith('image/') || f.type.startsWith('video/'))) return true;
   return IMAGE_EXT.test(f.name) || VIDEO_EXT.test(f.name);
 }
 

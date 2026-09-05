@@ -73,6 +73,7 @@ struct AssetImage: View {
     var contentMode: ContentMode = .fill
 
     @State private var image: UIImage?
+    @State private var loaded = false
 
     var body: some View {
         // 用 overlay 而不是 ZStack：填充模式下图片会溢出，
@@ -83,17 +84,25 @@ struct AssetImage: View {
                     Image(uiImage: image)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
+                } else if loaded, asset.isVideo {
+                    // 抽不出封面的视频（多半是 iOS 解不了的格式）给个胶片占位，
+                    // 不然格子就是一块空灰底，看着像坏了
+                    Image(systemName: "film")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.tertiaryLabel)
                 }
             }
             .clipped()
             .task(id: asset.id) {
                 if let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel) {
                     image = hit
+                    loaded = true
                     return
                 }
-                let loaded = await ThumbnailCache.shared.thumbnail(for: asset, maxPixel: maxPixel)
+                let made = await ThumbnailCache.shared.thumbnail(for: asset, maxPixel: maxPixel)
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.18)) { image = loaded }
+                withAnimation(.easeOut(duration: 0.18)) { image = made }
+                loaded = true
             }
     }
 }

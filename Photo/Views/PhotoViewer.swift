@@ -35,13 +35,23 @@ struct PhotoViewer: View {
         return assets.filter { existing.contains($0.id) }
     }
 
+    /// 当前这一页的背后是不是深色。
+    ///
+    /// 视频统一放在黑底上，这时工具栏必须走白色——浅色模式下 viewerLabel 是
+    /// 深灰，压在黑底上等于看不见。
+    private var onDarkSurface: Bool {
+        liveAssets.first { $0.id == currentID }?.isVideo ?? false
+    }
+
+    private var controlTint: Color { onDarkSurface ? .white : Theme.viewerLabel }
+
     var body: some View {
         let live = liveAssets
         let current = live.first { $0.id == currentID } ?? live.first
         let position = live.firstIndex { $0.id == current?.id }
 
         ZStack {
-            Theme.viewerBackground.ignoresSafeArea()
+            (onDarkSurface ? Color.black : Theme.viewerBackground).ignoresSafeArea()
 
             TabView(selection: $currentID) {
                 ForEach(live) { asset in
@@ -129,7 +139,7 @@ struct PhotoViewer: View {
                 topCircle {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Theme.viewerLabel)
+                        .foregroundStyle(controlTint)
                 }
             }
 
@@ -138,28 +148,39 @@ struct PhotoViewer: View {
             if total > 0 {
                 Text("\((position ?? 0) + 1) / \(total)")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Theme.viewerLabel)
+                    .foregroundStyle(controlTint)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 7)
                     .background {
-                        Capsule().fill(.ultraThinMaterial)
-                            .overlay(Capsule().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
+                        if onDarkSurface {
+                            Capsule().fill(.black.opacity(0.42))
+                                .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
+                        } else {
+                            Capsule().fill(.ultraThinMaterial)
+                                .overlay(Capsule().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
+                        }
                     }
             }
 
             Spacer()
 
-            Button {
-                isPlaying.toggle()
-            } label: {
-                topCircle(highlighted: isPlaying) {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(isPlaying ? Color.white : Theme.viewerLabel)
+            // 视频页不放幻灯片按钮：画面正中已经有一个播放键，
+            // 右上角再来一个，谁也说不清点哪个是播这段视频
+            if onDarkSurface {
+                Color.clear.frame(width: 38, height: 38)
+            } else {
+                Button {
+                    isPlaying.toggle()
+                } label: {
+                    topCircle(highlighted: isPlaying) {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(isPlaying ? Color.white : controlTint)
+                    }
                 }
+                .disabled(total < 2)
+                .opacity(total < 2 ? 0.35 : 1)
             }
-            .disabled(total < 2)
-            .opacity(total < 2 ? 0.35 : 1)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -198,7 +219,7 @@ struct PhotoViewer: View {
                         .font(.system(size: 11))
                         .opacity(0.7)
                 }
-                .foregroundStyle(Theme.viewerLabel)
+                .foregroundStyle(controlTint)
 
                 Spacer()
 
@@ -218,14 +239,14 @@ struct PhotoViewer: View {
     private func viewerIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(Theme.viewerLabel)
+            .foregroundStyle(controlTint)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())   // 让整个方框可点，而不是只有图标的不透明像素
     }
 
     /// 顶栏的圆形按钮。它悬在画面上，背后可能是任意颜色的照片或视频，
-    /// 所以底色不能只有 10% ——那在浅色画面上几乎看不见。用毛玻璃加描边，
-    /// 深浅画面上都能分出边界。
+    /// 所以底色不能只有 10% ——那在浅色画面上几乎看不见。
+    /// 深色画面（视频）上用半透明黑加白描边，浅色画面上用毛玻璃。
     private func topCircle<Content: View>(highlighted: Bool = false,
                                           @ViewBuilder content: () -> Content) -> some View {
         content()
@@ -233,6 +254,9 @@ struct PhotoViewer: View {
             .background {
                 if highlighted {
                     Circle().fill(Theme.accent)
+                } else if onDarkSurface {
+                    Circle().fill(.black.opacity(0.42))
+                        .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
                 } else {
                     Circle().fill(.ultraThinMaterial)
                         .overlay(Circle().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))

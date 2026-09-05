@@ -70,22 +70,14 @@ final class ThumbnailCache: @unchecked Sendable {
         return full
     }
 
-    /// 服务端用：直接拿到 JPEG 数据
-    func thumbnailData(for asset: Asset, maxPixel: Int, quality: CGFloat = 0.82) -> Data? {
-        if let hit = cached(asset, maxPixel: maxPixel) {
-            return hit.jpegData(compressionQuality: quality)
-        }
-        if asset.isVideo {
-            // 服务端是同步接口，抽帧是异步的，只用磁盘上抽好的那张。
-            // 还没抽过就先不给图，等 App 里滑到它、抽完落盘后自然就有了。
-            guard let data = try? Data(contentsOf: LibraryStore.posterURL(for: asset.id)) else { return nil }
-            guard let image = Self.downsample(data: data, maxPixel: maxPixel) else { return data }
-            store(image, id: asset.id, maxPixel: maxPixel)
-            return image.jpegData(compressionQuality: quality)
-        }
-        guard let made = Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel) else { return nil }
-        store(made, id: asset.id, maxPixel: maxPixel)
-        return made.jpegData(compressionQuality: quality)
+    /// 服务端用：直接拿到 JPEG 数据。
+    ///
+    /// 走的是和 App 里同一条路，视频没抽过封面就现抽一张。
+    /// 只读磁盘上已有的话，刚从网页传上来的视频会一直是 404，
+    /// 非得等你在 App 里划到它才有图。
+    func thumbnailData(for asset: Asset, maxPixel: Int, quality: CGFloat = 0.82) async -> Data? {
+        guard let image = await thumbnail(for: asset, maxPixel: maxPixel) else { return nil }
+        return image.jpegData(compressionQuality: quality)
     }
 
     private func store(_ image: UIImage, id: UUID, maxPixel: Int) {

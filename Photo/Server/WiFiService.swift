@@ -80,19 +80,21 @@ final class WiFiService {
             // 整图解码再重新编码，真机上足以触发内存回收。
             let size = min(max(Int(request.query["s"] ?? "") ?? 420, 32), 2048)
             let rangeHeader = request.header("range")
-            return await Task.detached(priority: .userInitiated) { () -> HTTPResponse in
-                if wantsThumb {
-                    guard let data = ThumbnailCache.shared.thumbnailData(for: asset, maxPixel: size) else {
-                        return HTTPResponse.notFound
-                    }
-                    return .binary(data, type: "image/jpeg")
-                } else {
-                    let url = LibraryStore.fileURL(for: asset)
-                    let type = ImageProbe.mimeType(forExtension: url.pathExtension)
-                    // 视频要支持 Range：不支持的话浏览器拖不动进度条，
-                    // 而且会把几百 MB 整个塞进一个响应里发出去
-                    return HTTPResponse.file(url, type: type, range: rangeHeader)
+
+            if wantsThumb {
+                // 视频封面是异步抽的，不能塞进下面的同步块里
+                guard let data = await ThumbnailCache.shared.thumbnailData(for: asset, maxPixel: size) else {
+                    return .notFound
                 }
+                return .binary(data, type: "image/jpeg")
+            }
+
+            return await Task.detached(priority: .userInitiated) { () -> HTTPResponse in
+                let url = LibraryStore.fileURL(for: asset)
+                let type = ImageProbe.mimeType(forExtension: url.pathExtension)
+                // 视频要支持 Range：不支持的话浏览器拖不动进度条，
+                // 而且会把几百 MB 整个塞进一个响应里发出去
+                return HTTPResponse.file(url, type: type, range: rangeHeader)
             }.value
         }
 
@@ -246,12 +248,7 @@ final class WiFiService {
         lastEvent = text
     }
 
-    /// 只能按扩展名判断。multipart 里的 Content-Type 由浏览器给，
-    /// 从网上存下来的视频常常是 application/octet-stream，指望不上。
-    private func isVideoName(_ name: String) -> Bool {
-        let ext = (name as NSString).pathExtension.lowercased()
-        return ["mp4", "mov", "m4v", "3gp", "avi", "mkv", "webm", "mpg", "mpeg", "wmv", "flv"].contains(ext)
-    }
+    private func isVideoName(_ name: String) -> Bool { MediaFormats.isVideo(fileName: name) }
 
     /// 按上传文件名里的相对路径找到（必要时创建）真正要落的目录。
     ///
