@@ -408,17 +408,15 @@ struct VideoPage: View {
                     }
 
                     Spacer()
-                    // 只有横拍视频转横屏才有意义：竖拍视频转过去占屏面积
-                    // 从 82% 掉到 26%，越转越小。已经在横屏时始终留着，
-                    // 否则转不回来。
-                    if landscape || asset.width > asset.height {
-                        Button {
-                            setLandscape(!landscape)
-                        } label: {
-                            Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
-                                .font(.system(size: 17, weight: .semibold))
-                                .frame(width: 38, height: 38)
-                        }
+                    // 一律给。竖拍视频转横屏确实会变小（占屏面积 82% -> 26%），
+                    // 但手机架着看、躺着看都可能想转，这是用户自己的选择，
+                    // 不该由我按「划不划算」替他决定。
+                    Button {
+                        setLandscape(!landscape)
+                    } label: {
+                        Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 38, height: 38)
                     }
                 }
             }
