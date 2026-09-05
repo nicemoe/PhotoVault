@@ -50,7 +50,6 @@ struct RootView: View {
 
                     if store.groups.isEmpty {
                         EmptyState(
-                            icon: "square.grid.2x2",
                             title: "还没有分组",
                             message: "分组用来归类目录，目录里存放照片。\n先建一个分组开始吧。",
                             actionTitle: "新建分组"

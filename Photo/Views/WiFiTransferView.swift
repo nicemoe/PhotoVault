@@ -145,10 +145,13 @@ struct WiFiTransferView: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 56, height: 56)
-                .contentShape(Rectangle())
+                // 卡片里只有一个孤零零的图标会显得没分量，加个浅色圆底
+                // 把它托住；导航栏那种一排图标才不需要圆底。
+                .background(tint.opacity(0.12), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)

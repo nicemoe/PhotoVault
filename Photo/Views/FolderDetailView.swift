@@ -69,7 +69,6 @@ struct FolderDetailView: View {
 
                     if folder.assets.isEmpty && children.isEmpty {
                         EmptyState(
-                            icon: "photo.badge.plus",
                             title: "这个目录是空的",
                             message: "可以从系统相册导入照片，\n也可以在里面再建子目录来分类。",
                             actionTitle: "从相册导入"

@@ -22,7 +22,6 @@ struct DestinationPickerSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if store.groups.isEmpty {
                         EmptyState(
-                            icon: "folder.badge.plus",
                             title: "还没有可用的目录",
                             message: "先创建一个分组，再在分组里建目录。",
                             actionTitle: "新建分组"

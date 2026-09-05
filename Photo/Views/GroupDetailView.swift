@@ -38,7 +38,6 @@ struct GroupDetailView: View {
                     // 只列直接挂在分组下的那层；子目录在各自的父目录里显示
                     if group.rootFolders.isEmpty {
                         EmptyState(
-                            icon: "folder.badge.plus",
                             title: "还没有目录",
                             message: "目录用来存放照片，\n里面还可以再建子目录。",
                             actionTitle: "新建目录"

@@ -269,23 +269,13 @@ struct FolderCard: View {
 // MARK: - 空状态
 
 struct EmptyState: View {
-    let icon: String
     let title: String
     let message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Theme.accent.opacity(0.12))
-                    .frame(width: 84, height: 84)
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .regular))
-                    .foregroundStyle(Theme.accent)
-            }
-
+        VStack(spacing: 16) {
             VStack(spacing: 6) {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
@@ -297,8 +287,8 @@ struct EmptyState: View {
                     .lineSpacing(2)
             }
 
-            // 一个大加号，不做成按钮：空状态里已经用文字说清楚要干什么了，
-            // 再套一个带文案的方块只是把同一句话说两遍。
+            // 一个大加号，不做成按钮：上面的文字已经说清楚要干什么了，
+            // 再套一个写着同样话的方块只是把一句话说两遍。
             if let action {
                 Button(action: action) {
                     Image(systemName: "plus")
@@ -308,13 +298,13 @@ struct EmptyState: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 2)
                 .accessibilityLabel(actionTitle ?? "添加")
             }
         }
         .padding(.horizontal, 40)
-        .padding(.vertical, 48)
-        .frame(maxWidth: .infinity)
+        // 撑出一块高度再居中，文字和加号才落在这块空白的正中，
+        // 而不是贴着上一块内容
+        .frame(maxWidth: .infinity, minHeight: 360, alignment: .center)
     }
 }
 
