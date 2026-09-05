@@ -35,11 +35,6 @@ final class PlayerHostView: UIView {
         set { playerLayer.player = newValue }
     }
 
-    var gravity: AVLayerVideoGravity {
-        get { playerLayer.videoGravity }
-        set { playerLayer.videoGravity = newValue }
-    }
-
     /// 是否允许外层相册左右翻页。
     ///
     /// 横屏快进要横向拖，而 TabView 的翻页是它内部那个 UIScrollView 在做。
@@ -92,22 +87,17 @@ struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer?
     /// false 表示这一页要独占横向手势（横屏快进）
     var pagingEnabled = true
-    /// 适应（留黑边）还是填充（裁掉溢出的部分）
-    var fill = false
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.player = player
         view.pagingEnabled = pagingEnabled
-        view.gravity = fill ? .resizeAspectFill : .resizeAspect
         return view
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
         if view.player !== player { view.player = player }
         if view.pagingEnabled != pagingEnabled { view.pagingEnabled = pagingEnabled }
-        let wanted: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
-        if view.gravity != wanted { view.gravity = wanted }
     }
 }
 
@@ -158,9 +148,6 @@ struct VideoPage: View {
     @State private var hintToken = 0
     /// 锁住后不响应任何手势，横躺着看不会被误触打断
     @State private var locked = false
-    /// 填充：裁掉溢出的部分铺满整屏。
-    /// 竖拍视频在横屏下只能占 26% 的面积，想铺满就只能裁。
-    @State private var fill = false
 
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
@@ -186,8 +173,7 @@ struct VideoPage: View {
                     // 横屏（全屏播放）和放大后都由本页独占横向手势，
                     // 竖屏没放大时把左右滑还给相册翻页
                     PlayerLayerView(player: player,
-                                    pagingEnabled: !(landscape || scale > 1.01),
-                                    fill: fill)
+                                    pagingEnabled: !(landscape || scale > 1.01))
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(scale)
                         .offset(offset)
@@ -358,23 +344,19 @@ struct VideoPage: View {
                 }
 
                 HStack(spacing: 4) {
-                    if landscape { lockButton }
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) { fill.toggle() }
-                    } label: {
-                        Image(systemName: fill
-                              ? "arrow.down.right.and.arrow.up.left"
-                              : "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 38, height: 38)
-                    }
+                    if landscape { lockButton } else { speedMenu }
                     Spacer()
-                    Button {
-                        setLandscape(!landscape)
-                    } label: {
-                        Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 38, height: 38)
+                    // 只有横拍视频转横屏才有意义：竖拍视频转过去占屏面积
+                    // 从 82% 掉到 26%，越转越小。已经在横屏时始终留着，
+                    // 否则转不回来。
+                    if landscape || asset.width > asset.height {
+                        Button {
+                            setLandscape(!landscape)
+                        } label: {
+                            Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                                .font(.system(size: 17, weight: .semibold))
+                                .frame(width: 38, height: 38)
+                        }
                     }
                 }
             }
