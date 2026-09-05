@@ -202,31 +202,6 @@ struct HamburgerIcon: View {
     }
 }
 
-/// 主要操作按钮：实色块、无渐变
-struct PrimaryButtonStyle: ButtonStyle {
-    var tint: Color = Theme.accent
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(tint.opacity(configuration.isPressed ? 0.82 : 1), in: RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
-    }
-}
-
-/// 次要操作按钮：填充灰块
-struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Theme.label)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(Theme.fill.opacity(configuration.isPressed ? 0.7 : 1), in: RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
-    }
-}
 
 /// 轻微缩放的按压反馈，用于卡片
 struct PressableCardStyle: ButtonStyle {

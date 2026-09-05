@@ -297,11 +297,19 @@ struct EmptyState: View {
                     .lineSpacing(2)
             }
 
-            if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .frame(width: 200)
-                    .padding(.top, 4)
+            // 一个大加号，不做成按钮：空状态里已经用文字说清楚要干什么了，
+            // 再套一个带文案的方块只是把同一句话说两遍。
+            if let action {
+                Button(action: action) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 56, height: 56)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+                .accessibilityLabel(actionTitle ?? "添加")
             }
         }
         .padding(.horizontal, 40)

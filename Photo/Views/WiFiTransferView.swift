@@ -63,10 +63,9 @@ struct WiFiTransferView: View {
                         .multilineTextAlignment(.center)
                         .lineSpacing(2)
                 }
-                Button("开启 WiFi 上传") {
+                actionIcon("play.fill", tint: Theme.accent, label: "开启 WiFi 上传") {
                     Task { await wifi.start() }
                 }
-                .buttonStyle(PrimaryButtonStyle())
 
             case .starting:
                 iconBadge("wifi", tint: Theme.accent)
@@ -115,10 +114,9 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                 }
 
-                Button("停止服务") {
+                actionIcon("stop.fill", tint: Theme.danger, label: "停止服务") {
                     wifi.stop()
                 }
-                .buttonStyle(SecondaryButtonStyle())
 
             case .failed(let message):
                 iconBadge("exclamationmark.triangle", tint: Theme.danger)
@@ -131,15 +129,29 @@ struct WiFiTransferView: View {
                         .foregroundStyle(Theme.secondaryLabel)
                         .multilineTextAlignment(.center)
                 }
-                Button("重试") {
+                actionIcon("arrow.clockwise", tint: Theme.accent, label: "重试") {
                     Task { await wifi.start() }
                 }
-                .buttonStyle(PrimaryButtonStyle())
             }
         }
         .frame(maxWidth: .infinity)
         .padding(22)
         .flatCard()
+    }
+
+    /// 卡片里的动作按钮：只有图标，不做成带文案的方块。
+    /// 上面的标题和说明已经把要干什么讲清楚了。
+    private func actionIcon(_ name: String, tint: Color, label: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 56, height: 56)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func iconBadge(_ name: String, tint: Color) -> some View {
