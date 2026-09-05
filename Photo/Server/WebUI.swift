@@ -54,7 +54,7 @@ header{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px s
 .book{display:flex;align-items:center;gap:14px;background:var(--surface);
   border-radius:var(--radius);padding:14px 16px}
 .spine{width:34px;height:46px;border-radius:4px 7px 7px 4px;flex:none;
-  background:linear-gradient(140deg,#E0574A,#B23C33)}
+  background:linear-gradient(140deg,#2E5F86,#1E4160)}
 .bmain{flex:1;min-width:0}
 .btitle{font-weight:650;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bmeta{font-size:12.5px;color:var(--sub);margin-top:2px}
@@ -110,24 +110,39 @@ header{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px s
 const $ = s => document.querySelector(s);
 let books = [];
 
-// 和 App 图标同一朵郁金香，花瓣路径就是按图标那套坐标算出来的
+// 和 App 图标同一本书。页面路径是按图标那套归一化坐标 ×64 算出来的，
+// 两边的弧度、厚度、行距完全一致。
 function logoSVG(){
-  const BACK_L = 'M27.29 29.98Q28.41 32.97 31.02 33.2Q33.63 32.97 34.75 29.98L37.23 21.93'
-               + 'Q37.35 13.88 33.63 18.71Q31.02 8.59 28.41 18.71Q24.69 13.88 24.81 21.93Z';
-  const BACK_R = 'M29.25 29.98Q30.37 32.97 32.98 33.2Q35.59 32.97 36.71 29.98L39.19 21.93'
-               + 'Q39.31 13.88 35.59 18.71Q32.98 8.59 30.37 18.71Q26.65 13.88 26.77 21.93Z';
-  const FRONT  = 'M28.5 29.62Q29.55 32.43 32 32.65Q34.45 32.43 35.5 29.62L37.84 22.05'
-               + 'Q37.95 14.49 34.45 19.03Q32 9.51 29.55 19.03Q26.05 14.49 26.16 22.05Z';
+  // 四层：封面 → 两层纸边 → 纸面，每层往下错一点，叠出厚度
+  const LAYERS = [
+    ['#2E5F86', 'M30.98 22.27Q16.96 17.15 6.4 17.92L6.4 42.11Q16.96 48.13 30.98 47.74Z',
+                'M33.02 22.27Q47.04 17.15 57.6 17.92L57.6 42.11Q47.04 48.13 33.02 47.74Z'],
+    ['#DFD2BC', 'M30.98 21.63Q16.96 16.51 6.4 17.28L6.4 41.47Q16.96 47.49 30.98 47.1Z',
+                'M33.02 21.63Q47.04 16.51 57.6 17.28L57.6 41.47Q47.04 47.49 33.02 47.1Z'],
+    ['#EFE6D6', 'M30.98 20.99Q16.96 15.87 6.4 16.64L6.4 40.83Q16.96 46.85 30.98 46.46Z',
+                'M33.02 20.99Q47.04 15.87 57.6 16.64L57.6 40.83Q47.04 46.85 33.02 46.46Z'],
+    ['#FFFDF8', 'M30.98 20.35Q16.96 15.23 6.4 16L6.4 40.19Q16.96 46.21 30.98 45.82Z',
+                'M33.02 20.35Q47.04 15.23 57.6 16L57.6 40.19Q47.04 46.21 33.02 45.82Z'],
+  ];
+  const LINES = [[21.44, 21.44, 25.92], [21.44, 28.86, 33.34], [18.11, 37.15, 40.77]];
+
+  let pages = '';
+  for(const [fill, left, right] of LAYERS){
+    pages += '<path d="' + left + '" fill="' + fill + '"/>'
+           + '<path d="' + right + '" fill="' + fill + '"/>';
+  }
+  let text = '';
+  for(const [half, outer, inner] of LINES){
+    text += '<path d="M' + (32 - half) + ' ' + outer + 'L27.01 ' + inner + '"/>'
+          + '<path d="M' + (32 + half) + ' ' + outer + 'L36.99 ' + inner + '"/>';
+  }
   return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">'
        + '<rect width="64" height="64" rx="15" fill="#E8F3EA"/>'
-       + '<ellipse cx="32" cy="62" rx="40" ry="17" fill="#569E5C"/>'
-       + '<ellipse cx="34" cy="66" rx="46" ry="18" fill="#6CB370"/>'
-       + '<path d="M32 33 L32 58" stroke="#428A4A" stroke-width="2.4" stroke-linecap="round"/>'
-       + '<path d="M32 54Q25 50 24.5 40Q30 45 32 54Z" fill="#4A9252"/>'
-       + '<path d="M32 56Q39 52 39.5 44Q34 48 32 56Z" fill="#3C8044"/>'
-       + '<path d="' + BACK_L + '" fill="#C03E34"/>'
-       + '<path d="' + BACK_R + '" fill="#C03E34"/>'
-       + '<path d="' + FRONT + '" fill="#E0574A"/>'
+       + '<ellipse cx="26.56" cy="67.84" rx="40.64" ry="25.6" fill="#569E5C"/>'
+       + '<ellipse cx="39.36" cy="74.56" rx="42.56" ry="27.2" fill="#6CB370"/>'
+       + pages
+       + '<g stroke="#C9D6E1" stroke-width="0.85" stroke-linecap="round">' + text + '</g>'
+       + '<path d="M31.23 20.35H32.77L33.34 47.74H30.66Z" fill="#244C6D"/>'
        + '</svg>';
 }
 $('#logo').innerHTML = logoSVG();
