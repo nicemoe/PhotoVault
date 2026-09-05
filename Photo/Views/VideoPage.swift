@@ -82,9 +82,17 @@ struct TapCatcher: UIViewRepresentable {
 /// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
 /// 工具栏没法跟着单击开合，缩放和快进手势也做不了。
 final class PlayerHostView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
 
-    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    /// 单独一个 sublayer，不用 layerClass。
+    ///
+    /// 用 layerClass 的话画面层就是视图的背衬层，尺寸只能等于视图尺寸——
+    /// 而这个视图有多大由 SwiftUI 说了算，中间任何一层（分页容器、安全区、
+    /// presentation）把它缩一点，画面就跟着缩，四边全留黑。前面一直在猜是
+    /// 哪一层干的，堵一处漏一处。
+    ///
+    /// 现在画面层自己按窗口矩形定位：不管这个视图被摆成多大，画面严格铺满
+    /// 整个窗口，aspect fit 必然至少铺满一个方向。
+    private let playerLayer = AVPlayerLayer()
 
     var player: AVPlayer? {
         get { playerLayer.player }
@@ -99,7 +107,10 @@ final class PlayerHostView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         playerLayer.videoGravity = .resizeAspect
+        layer.addSublayer(playerLayer)
         backgroundColor = .clear
+        // 画面要能画到视图边界之外，否则视图被缩小时又被裁回去了
+        clipsToBounds = false
         // 画面本身不需要接触摸。开着的话它会先把触摸吃掉，
         // 外层 SwiftUI 的单击/双击就不一定收得到。
         isUserInteractionEnabled = false
@@ -107,6 +118,19 @@ final class PlayerHostView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        // 转屏时不要给 frame 变化配隐式动画，否则画面会歪着飞一下
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = window.map { convert($0.bounds, from: $0) } ?? bounds
+        CATransaction.commit()
+    }
 }
 
 struct PlayerLayerView: UIViewRepresentable {
@@ -769,6 +793,10 @@ struct VideoPage: View {
                     let span = min(duration, max(60, duration / 2))
                     let delta = Double(value.translation.width / size.width) * span
                     current = min(max(0, dragAnchor + delta), duration)
+                    // 拖的过程中画面就跟着走，不用等松手才知道拖到了哪。
+                    // 带容差，每帧做精确 seek 会卡。
+                    scrubbing = true
+                    seek(to: current, precise: false)
                     show(hint: "\(timeText(current)) / \(timeText(duration))")
                 case .brightness:
                     let delta = Double(-value.translation.height / size.height)
@@ -785,7 +813,10 @@ struct VideoPage: View {
                 }
             }
             .onEnded { _ in
-                if dragMode == .seek { seek(to: current) }
+                if dragMode == .seek {
+                    seek(to: current, precise: true)   // 松手落到准确位置
+                    scrubbing = false
+                }
                 dragMode = nil
                 steadyOffset = offset
             }
