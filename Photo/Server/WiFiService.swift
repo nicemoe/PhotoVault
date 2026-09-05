@@ -79,6 +79,7 @@ final class WiFiService {
             // 尺寸也来自网络。不夹上界的话 /thumb?s=99999999 会让缩略图退化成
             // 整图解码再重新编码，真机上足以触发内存回收。
             let size = min(max(Int(request.query["s"] ?? "") ?? 420, 32), 2048)
+            let rangeHeader = request.header("range")
             return await Task.detached(priority: .userInitiated) { () -> HTTPResponse in
                 if wantsThumb {
                     guard let data = ThumbnailCache.shared.thumbnailData(for: asset, maxPixel: size) else {
@@ -87,11 +88,10 @@ final class WiFiService {
                     return .binary(data, type: "image/jpeg")
                 } else {
                     let url = LibraryStore.fileURL(for: asset)
-                    guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
-                        return HTTPResponse.notFound
-                    }
-                    let ext = url.pathExtension
-                    return .binary(data, type: ImageProbe.mimeType(forExtension: ext))
+                    let type = ImageProbe.mimeType(forExtension: url.pathExtension)
+                    // 视频要支持 Range：不支持的话浏览器拖不动进度条，
+                    // 而且会把几百 MB 整个塞进一个响应里发出去
+                    return HTTPResponse.file(url, type: type, range: rangeHeader)
                 }
             }.value
         }
@@ -184,23 +184,49 @@ final class WiFiService {
                 return .error("请求格式不正确")
             }
 
-            let body = request.body
-            let parts = await Task.detached(priority: .userInitiated) {
-                Multipart.parse(body: body, boundary: boundary)
-            }.value
-
             var saved = 0
             var skipped = 0
-            for part in parts where part.fileName != nil && !part.data.isEmpty {
-                // 网页拖整个文件夹上来时，文件名里带着相对路径（照片/原图/a.jpg），
-                // 按它逐级建目录，把原来的层级原样搬过来，
-                // 而不是把里面的文件全抖到当前目录
-                let target = resolveFolder(for: part.fileName ?? "", under: folderID)
-                // 落盘在后台，主线程只在 attach 时短暂持有
-                if await store.addImage(data: part.data, to: target) != nil {
-                    saved += 1
-                } else {
-                    skipped += 1
+
+            if let bodyFile = request.bodyFile {
+                // 大请求体：正文已经在磁盘上，逐段拆成独立文件，全程不进内存
+                let workDir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mp-\(UUID().uuidString)", isDirectory: true)
+                defer { try? FileManager.default.removeItem(at: workDir) }
+
+                let parts = await Task.detached(priority: .userInitiated) {
+                    MultipartStream.parse(fileURL: bodyFile, boundary: boundary, into: workDir)
+                }.value
+
+                for part in parts where part.fileName != nil && part.byteCount > 0 {
+                    let name = part.fileName ?? ""
+                    let target = resolveFolder(for: name, under: folderID)
+                    if isVideoName(name) {
+                        if await store.addVideo(from: part.fileURL, to: target) != nil { saved += 1 }
+                        else { skipped += 1 }
+                    } else if let data = try? Data(contentsOf: part.fileURL),
+                              await store.addImage(data: data, to: target) != nil {
+                        saved += 1
+                    } else {
+                        skipped += 1
+                    }
+                }
+            } else {
+                let body = request.body
+                let parts = await Task.detached(priority: .userInitiated) {
+                    Multipart.parse(body: body, boundary: boundary)
+                }.value
+
+                for part in parts where part.fileName != nil && !part.data.isEmpty {
+                    // 网页拖整个文件夹上来时，文件名里带着相对路径（照片/原图/a.jpg），
+                    // 按它逐级建目录，把原来的层级原样搬过来，
+                    // 而不是把里面的文件全抖到当前目录
+                    let target = resolveFolder(for: part.fileName ?? "", under: folderID)
+                    // 落盘在后台，主线程只在 attach 时短暂持有
+                    if await store.addImage(data: part.data, to: target) != nil {
+                        saved += 1
+                    } else {
+                        skipped += 1
+                    }
                 }
             }
             if saved > 0 {
@@ -218,6 +244,13 @@ final class WiFiService {
 
     private func note(_ text: String) {
         lastEvent = text
+    }
+
+    /// 只能按扩展名判断。multipart 里的 Content-Type 由浏览器给，
+    /// 从网上存下来的视频常常是 application/octet-stream，指望不上。
+    private func isVideoName(_ name: String) -> Bool {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ["mp4", "mov", "m4v", "3gp", "avi", "mkv", "webm", "mpg", "mpeg", "wmv", "flv"].contains(ext)
     }
 
     /// 按上传文件名里的相对路径找到（必要时创建）真正要落的目录。
@@ -282,9 +315,12 @@ final class WiFiService {
             json["assets"] = folder.assets.reversed().map { asset in
                 [
                     "id": asset.id.uuidString,
+                    "kind": asset.kind.rawValue,
                     "width": asset.width,
                     "height": asset.height,
-                    "bytes": asset.byteCount
+                    "bytes": asset.byteCount,
+                    "duration": asset.duration,
+                    "durationText": asset.durationText
                 ] as [String: Any]
             }
         }

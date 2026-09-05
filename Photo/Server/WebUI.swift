@@ -104,6 +104,10 @@ header{
 .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .ph .del{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:15px;line-height:26px;text-align:center;opacity:0;transition:opacity .15s}
 .ph:hover .del,.ph:active .del{opacity:1}
+/* 视频角标放左下，和右上角的删除键错开 */
+.ph .vbadge{position:absolute;left:6px;bottom:6px;padding:2px 7px;border-radius:999px;
+  background:rgba(0,0,0,.55);color:#fff;font-size:11.5px;font-weight:600;
+  font-variant-numeric:tabular-nums;cursor:pointer}
 
 /* 上传区 */
 .drop{
@@ -165,7 +169,7 @@ header{
 /* 全屏预览 */
 .viewer{position:fixed;inset:0;background:rgba(0,0,0,.94);display:none;align-items:center;justify-content:center;z-index:80}
 .viewer.on{display:flex}
-.viewer img{max-width:96vw;max-height:92vh;object-fit:contain}
+.viewer img,.viewer video{max-width:96vw;max-height:92vh;object-fit:contain}
 .viewer .x{position:absolute;top:16px;right:18px;color:#fff;font-size:30px;line-height:1;opacity:.85}
 
 /* toast */
@@ -211,7 +215,10 @@ header{
 </div>
 
 <div class="mask" id="mask"><div class="modal" id="modal"></div></div>
-<div class="viewer" id="viewer" onclick="closeViewer()"><span class="x">&times;</span><img id="viewerImg" alt=""></div>
+<div class="viewer" id="viewer" onclick="closeViewer()"><span class="x">&times;</span><img id="viewerImg" alt="">
+  <!-- 播放器上的点击不能冒泡到遮罩，否则一按播放键整层就关了 -->
+  <video id="viewerVideo" controls playsinline style="display:none" onclick="event.stopPropagation()"></video>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -293,7 +300,7 @@ function renderToolbar(){
     html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`;
   }else{
     // 目录里既能传图，也能再建子目录
-    html = `<button class="btn primary" onclick="filePick()">${plus}选择图片上传</button>`
+    html = `<button class="btn primary" onclick="filePick()">${plus}选择文件上传</button>`
          + `<button class="btn" onclick="promptCreateFolder()">${plus}新建子目录</button>`;
   }
   $('#toolbar').innerHTML = html;
@@ -360,16 +367,17 @@ function render(){
     ${subs.length ? '<div class="grid">' + subs.map(s => folderCardHTML(gid, s)).join('') + '</div>' : ''}
     <div class="drop" id="drop">
       <div class="up">${ICON.upload}</div>
-      <h3>把图片拖到这里上传</h3>
+      <h3>把图片或视频拖到这里上传</h3>
       <p>一次可以拖多张；拖一整个文件夹进来会按原来的层级建好子目录</p>
-      <button class="btn primary" style="display:inline-flex" onclick="filePick()">选择图片</button>
+      <button class="btn primary" style="display:inline-flex" onclick="filePick()">选择文件</button>
     </div>
     ${list.length ? '<div class="photos">' + list.map(a => `
       <div class="ph">
-        <img loading="lazy" src="/thumb?id=${a.id}&s=380" alt="" onclick="openViewer('${a.id}')">
+        <img loading="lazy" src="/thumb?id=${a.id}&s=380" alt="" onclick="openViewer('${a.id}','${a.kind || 'image'}')">
+        ${a.kind === 'video' ? `<span class="vbadge" onclick="openViewer('${a.id}','video')">▶ ${a.durationText || ''}</span>` : ''}
         <span class="del" onclick="removeAsset('${a.id}')">&times;</span>
       </div>`).join('') + '</div>'
-    : (subs.length ? '' : emptyHTML(ICON.photo,'这个目录还没有图片','上传后手机 App 里会立刻出现'))}
+    : (subs.length ? '' : emptyHTML(ICON.photo,'这个目录还没有内容','上传的图片和视频会立刻出现在手机 App 里'))}
   `;
 }
 
@@ -508,19 +516,34 @@ async function removeAsset(id){
 }
 
 /* ---------- 预览 ---------- */
-function openViewer(id){
-  $('#viewerImg').src = '/photo?id=' + id;
+function openViewer(id, kind){
+  const img = $('#viewerImg'), vid = $('#viewerVideo');
+  if(kind === 'video'){
+    img.style.display = 'none'; img.src = '';
+    vid.style.display = 'block';
+    // 服务端支持 Range，所以这里能直接拖进度条，不用等整个文件下完
+    vid.src = '/photo?id=' + id;
+    vid.play().catch(() => {});
+  }else{
+    vid.pause(); vid.removeAttribute('src'); vid.load();
+    vid.style.display = 'none';
+    img.style.display = 'block';
+    img.src = '/photo?id=' + id;
+  }
   $('#viewer').classList.add('on');
 }
 function closeViewer(){
   $('#viewer').classList.remove('on');
   $('#viewerImg').src = '';
+  const vid = $('#viewerVideo');
+  // 光暂停不够：不把 src 摘掉，浏览器会继续在后台把整个视频拉完
+  vid.pause(); vid.removeAttribute('src'); vid.load();
 }
 
 /* ---------- 选择文件 ---------- */
 const picker = document.createElement('input');
 picker.type = 'file';
-picker.accept = 'image/*';
+picker.accept = 'image/*,video/*';
 picker.multiple = true;
 picker.onchange = () => { if(picker.files.length) upload(picker.files); picker.value = ''; };
 function filePick(){ picker.click(); }
@@ -647,20 +670,35 @@ function walkEntry(entry, out, prefix){
 }
 
 /* ---------- 上传 ---------- */
-// 分批发送：手机端是把整个请求体读进内存的，一次几百 MB 会被系统杀掉
+const IMAGE_EXT = /\.(jpe?g|png|heic|heif|gif|webp|tiff?|bmp)$/i;
+const VIDEO_EXT = /\.(mp4|mov|m4v|3gp|avi|mkv|webm|mpe?g|wmv|flv)$/i;
+
+function isVideoFile(f){
+  return f.type ? f.type.startsWith('video/') : VIDEO_EXT.test(f.name);
+}
+function isMedia(f){
+  if(f.type) return f.type.startsWith('image/') || f.type.startsWith('video/');
+  // 从网上存下来的文件常常没有 type，只能看扩展名
+  return IMAGE_EXT.test(f.name) || VIDEO_EXT.test(f.name);
+}
+
+// 分批发送。手机端现在是边收边写盘的，不再受内存限制，但一批太大的话
+// 中途断网要重传的量也大，所以图片仍按 20MB 一批；视频单独成批，
+// 一个文件一批，进度条也才走得准。
 const BATCH_MAX_BYTES = 20 * 1024 * 1024;
 const BATCH_MAX_FILES = 25;
 
 function makeBatches(files){
   const batches = [];
   let current = [], size = 0;
+  const flush = () => { if(current.length){ batches.push(current); current = []; size = 0; } };
+
   for(const f of files){
-    if(current.length && (size + f.size > BATCH_MAX_BYTES || current.length >= BATCH_MAX_FILES)){
-      batches.push(current); current = []; size = 0;
-    }
+    if(isVideoFile(f)){ flush(); batches.push([f]); continue; }
+    if(current.length && (size + f.size > BATCH_MAX_BYTES || current.length >= BATCH_MAX_FILES)) flush();
     current.push(f); size += f.size;
   }
-  if(current.length) batches.push(current);
+  flush();
   return batches;
 }
 
@@ -683,22 +721,22 @@ async function upload(fileList, folderId){
   if(uploading){ toast('还有一批正在上传，请稍候'); return; }
 
   const all = [...fileList];
-  const images = all.filter(f => f.type ? f.type.startsWith('image/') : /\.(jpe?g|png|heic|heif|gif|webp|tiff?|bmp)$/i.test(f.name));
-  const ignored = all.length - images.length;
-  if(!images.length){ toast('没有找到可上传的图片'); return; }
+  const media = all.filter(isMedia);
+  const ignored = all.length - media.length;
+  if(!media.length){ toast('没有找到可上传的图片或视频'); return; }
 
   uploading = true;
-  const batches = makeBatches(images);
-  const totalBytes = images.reduce((sum, f) => sum + f.size, 0) || 1;
+  const batches = makeBatches(media);
+  const totalBytes = media.reduce((sum, f) => sum + f.size, 0) || 1;
   let sentBytes = 0, saved = 0, skipped = ignored, failed = 0;
 
-  showUploadProgress(`上传 ${images.length} 个文件`, 0);
+  showUploadProgress(`上传 ${media.length} 个文件`, 0);
 
   for(const batch of batches){
     const batchBytes = batch.reduce((sum, f) => sum + f.size, 0);
     try{
       const res = await sendBatch(batch, target, loaded => {
-        showUploadProgress(`上传中 ${saved} / ${images.length}`, (sentBytes + loaded) / totalBytes);
+        showUploadProgress(`上传中 ${saved} / ${media.length}`, (sentBytes + loaded) / totalBytes);
       });
       if(res && res.ok){ saved += res.saved; skipped += res.skipped || 0; }
       else { failed += batch.length; }
@@ -706,7 +744,7 @@ async function upload(fileList, folderId){
       failed += batch.length;
     }
     sentBytes += batchBytes;
-    showUploadProgress(`上传中 ${saved} / ${images.length}`, sentBytes / totalBytes);
+    showUploadProgress(`上传中 ${saved} / ${media.length}`, sentBytes / totalBytes);
   }
 
   uploading = false;
@@ -715,7 +753,7 @@ async function upload(fileList, folderId){
   const notes = [];
   if(skipped) notes.push(`${skipped} 个格式不支持`);
   if(failed) notes.push(`${failed} 个失败`);
-  toast(`已上传 ${saved} 张${notes.length ? '，' + notes.join('、') : ''}`);
+  toast(`已上传 ${saved} 个${notes.length ? '，' + notes.join('、') : ''}`);
 
   refreshAfterUpload(target);
 }

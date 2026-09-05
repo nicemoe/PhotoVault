@@ -168,9 +168,12 @@ private final class ResumeGuard: @unchecked Sendable {
 
 private final class HTTPConnection {
 
-    /// 单次请求体上限。请求体是整份读进内存再解析的，设太大在真机上会被系统回收；
-    /// 网页端已经按 20MB 一批切分上传，64MB 留足余量。
-    private static let maxBodyBytes = 64 * 1024 * 1024
+    /// 单次请求体上限。视频上传要走这条路，所以放到 4GB。
+    /// 大的请求体不进内存——超过 spillThreshold 就边收边写盘。
+    private static let maxBodyBytes = 4 * 1024 * 1024 * 1024
+
+    /// 超过这个大小的请求体落盘。小请求（JSON、几张图）还是走内存，省一次读写。
+    private static let spillThreshold = 4 * 1024 * 1024
 
     private let connection: NWConnection
     private let queue: DispatchQueue
@@ -191,6 +194,11 @@ private final class HTTPConnection {
     private var headerScanOffset = 0
     private var isHandling = false
     private var isClosed = false
+
+    /// 请求体落盘时用：一边收一边往这里写，收满 contentLength 就交给上层
+    private var spillFile: URL?
+    private var spillHandle: FileHandle?
+    private var spilled = 0
 
     init(connection: NWConnection,
          queue: DispatchQueue,
@@ -221,7 +229,9 @@ private final class HTTPConnection {
 
             if let data, !data.isEmpty {
                 self.buffer.append(data)
-                if self.buffer.count > Self.maxBodyBytes {
+                // 只有「没在落盘」的时候才用缓冲区大小卡上限。
+                // 落盘模式下缓冲区每轮都会被搬空，涨不上去。
+                if self.spillHandle == nil, self.buffer.count > Self.spillThreshold * 4 {
                     self.send(.text("413 Payload Too Large", status: 413), keepAlive: false)
                     return
                 }
@@ -242,9 +252,38 @@ private final class HTTPConnection {
         if pending == nil {
             guard parseHeaders() else { return }
         }
-        guard let request = pending, buffer.count >= request.contentLength else { return }
+        guard let request = pending else { return }
 
-        // prefix / removeFirst 都是按元素个数算的，与 startIndex 无关，这里是安全的
+        // 大请求体：边收边写盘，内存里只过一遍缓冲区
+        if request.contentLength > Self.spillThreshold {
+            if spillHandle == nil { openSpill() }
+            guard let handle = spillHandle else {
+                send(.text("500 无法写入临时文件", status: 500), keepAlive: false)
+                return
+            }
+            let need = request.contentLength - spilled
+            if need > 0, !buffer.isEmpty {
+                let take = min(need, buffer.count)
+                // prefix / removeFirst 按元素个数算，与 startIndex 无关，这里是安全的
+                try? handle.write(contentsOf: Data(buffer.prefix(take)))
+                buffer.removeFirst(take)
+                spilled += take
+                if buffer.isEmpty { buffer = Data() }
+            }
+            guard spilled >= request.contentLength else { return }   // 还没收完，等下一批
+
+            try? handle.close()
+            spillHandle = nil
+            let file = spillFile
+            spillFile = nil
+            spilled = 0
+            pending = nil
+            dispatch(request, body: Data(), bodyFile: file)
+            return
+        }
+
+        guard buffer.count >= request.contentLength else { return }
+
         let body = Data(buffer.prefix(request.contentLength))
         buffer.removeFirst(request.contentLength)
         pending = nil
@@ -253,7 +292,16 @@ private final class HTTPConnection {
         // 避免长连接上偏移量一路累加
         if buffer.isEmpty { buffer = Data() }
 
-        dispatch(request, body: body)
+        dispatch(request, body: body, bodyFile: nil)
+    }
+
+    private func openSpill() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-\(UUID().uuidString).bin")
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        spillHandle = try? FileHandle(forWritingTo: url)
+        spillFile = spillHandle == nil ? nil : url
+        spilled = 0
     }
 
     /// 解析出 header 后把它从缓冲区里摘掉，返回是否成功
@@ -310,7 +358,7 @@ private final class HTTPConnection {
         return true
     }
 
-    private func dispatch(_ pending: PendingRequest, body: Data) {
+    private func dispatch(_ pending: PendingRequest, body: Data, bodyFile: URL?) {
         // 拆 path / query
         let target = pending.target
         var path = target
@@ -332,7 +380,8 @@ private final class HTTPConnection {
                                   path: path,
                                   query: query,
                                   headers: pending.headers,
-                                  body: body)
+                                  body: body,
+                                  bodyFile: bodyFile)
         let keepAlive = pending.keepAlive
         let handler = self.handler
         let queue = self.queue
@@ -340,6 +389,8 @@ private final class HTTPConnection {
         isHandling = true
         Task { [weak self] in
             let response = await handler(request)
+            // 处理完就把落盘的请求体删掉，不然临时目录会一直涨
+            if let bodyFile { try? FileManager.default.removeItem(at: bodyFile) }
             queue.async { self?.send(response, keepAlive: keepAlive) }
         }
     }
@@ -366,6 +417,11 @@ private final class HTTPConnection {
             isClosed = true
             buffer.removeAll()
             pending = nil
+            // 连接中途断了：收了一半的请求体没人要了，别留在磁盘上
+            try? spillHandle?.close()
+            spillHandle = nil
+            if let file = spillFile { try? FileManager.default.removeItem(at: file) }
+            spillFile = nil
             connection.cancel()
             onClose(ObjectIdentifier(self))
         }

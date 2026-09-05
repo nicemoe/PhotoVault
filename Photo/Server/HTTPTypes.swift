@@ -8,6 +8,9 @@ struct HTTPRequest {
     var query: [String: String]
     var headers: [String: String]     // key 一律小写
     var body: Data
+    /// 大请求体落在磁盘上时才有值，body 这时是空的。
+    /// 视频动辄几百 MB，整份读进内存会被系统杀掉。
+    var bodyFile: URL?
 
     func header(_ name: String) -> String? { headers[name.lowercased()] }
 
@@ -75,6 +78,73 @@ struct HTTPResponse {
                      body: data)
     }
 
+    /// 发磁盘上的一个文件，支持 Range。
+    ///
+    /// 视频必须支持 Range：不支持的话浏览器拖不动进度条，而且会把几百 MB
+    /// 整个塞进一个响应里发出去。每次最多回 chunkCap，剩下的等浏览器再来要。
+    static func file(_ url: URL, type: String, range: String?) -> HTTPResponse {
+        let chunkCap = 4 * 1024 * 1024
+
+        guard let total = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil,
+              total > 0,
+              let handle = try? FileHandle(forReadingFrom: url) else {
+            return .notFound
+        }
+        defer { try? handle.close() }
+
+        var start = 0
+        var end = total - 1
+        var partial = false
+
+        if let raw = range, let parsed = parseByteRange(raw, total: total) {
+            start = parsed.lowerBound
+            end = parsed.upperBound
+            partial = true
+        }
+        end = min(end, start + chunkCap - 1)
+
+        guard start <= end else {
+            return HTTPResponse(status: 416,
+                                headers: ["Content-Range": "bytes */\(total)"],
+                                body: Data())
+        }
+
+        try? handle.seek(toOffset: UInt64(start))
+        let data = (try? handle.read(upToCount: end - start + 1)) ?? Data()
+
+        var headers = [
+            "Content-Type": type,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=31536000"
+        ]
+        if partial || end < total - 1 {
+            headers["Content-Range"] = "bytes \(start)-\(start + data.count - 1)/\(total)"
+            return HTTPResponse(status: 206, headers: headers, body: data)
+        }
+        return HTTPResponse(status: 200, headers: headers, body: data)
+    }
+
+    /// 只认最常见的 "bytes=start-end" / "bytes=start-" / "bytes=-suffix"
+    private static func parseByteRange(_ raw: String, total: Int) -> ClosedRange<Int>? {
+        guard total > 0 else { return nil }
+        let spec = raw.replacingOccurrences(of: "bytes=", with: "").trimmingCharacters(in: .whitespaces)
+        guard !spec.contains(","), let dash = spec.firstIndex(of: "-") else { return nil }
+
+        let headText = String(spec[spec.startIndex..<dash])
+        let tailText = String(spec[spec.index(after: dash)...])
+
+        if headText.isEmpty {
+            // bytes=-N：最后 N 个字节
+            guard let suffix = Int(tailText), suffix > 0 else { return nil }
+            let start = max(0, total - suffix)
+            return start...(total - 1)
+        }
+        guard let start = Int(headText), start >= 0, start < total else { return nil }
+        let end = Int(tailText).map { min($0, total - 1) } ?? (total - 1)
+        guard end >= start else { return nil }
+        return start...end
+    }
+
     static let notFound = HTTPResponse.text("404 Not Found", status: 404)
 
     var statusText: String {
@@ -82,9 +152,11 @@ struct HTTPResponse {
         case 200: return "OK"
         case 201: return "Created"
         case 204: return "No Content"
+        case 206: return "Partial Content"
         case 400: return "Bad Request"
         case 404: return "Not Found"
         case 413: return "Payload Too Large"
+        case 416: return "Range Not Satisfiable"
         case 500: return "Internal Server Error"
         default:  return "OK"
         }
