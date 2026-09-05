@@ -312,10 +312,20 @@ struct Plan {
     std::wstring label;
 };
 
+/// AVI 不存每帧的时间戳。
+///
+/// 里面装的就算是合规的 H.264，换壳到 mp4 时每个包都没有 PTS，ffmpeg 只能
+/// 按顺序凑，遇到 B 帧就凑错——写出来的 mp4 里 DTS 非单调递增。ffmpeg 自己
+/// 退出码还是 0，Windows 上的播放器多半也能凑合放，但 iOS 的解码器严格，
+/// 拿到没有显示时间的帧就是不放。所以 AVI 一律重新编码，不走换壳。
+static bool ContainerLacksTimestamps(const std::wstring& ext) {
+    return ext == L"avi" || ext == L"divx";
+}
+
 /// iOS 硬件解码器只吃 H.264 和 HEVC，而且要 8bit 4:2:0（HEVC 可以 10bit）。
 /// 编码本身合规的，换个 mp4 壳就行——不重新编码，几秒钟搞定，画质零损失。
 /// 剩下的老老实实重编码。
-static Plan DecidePlan(const Probe& p) {
+static Plan DecidePlan(const Probe& p, const std::wstring& ext) {
     Plan plan;
     if (p.vcodec == "h264") {
         plan.copyVideo = (p.pixfmt == "yuv420p" || p.pixfmt == "yuvj420p");
@@ -323,6 +333,7 @@ static Plan DecidePlan(const Probe& p) {
         plan.copyVideo = (p.pixfmt == "yuv420p" || p.pixfmt == "yuvj420p"
                           || p.pixfmt == "yuv420p10le");
     }
+    if (ContainerLacksTimestamps(ext)) plan.copyVideo = false;
     // mp3 塞进 mp4 虽然合法，但 iOS 上不一定认，统一转 aac 更省事
     plan.copyAudio = (!p.hasAudio || p.acodec == "aac");
 
@@ -333,6 +344,24 @@ static Plan DecidePlan(const Probe& p) {
 }
 
 // ── 转换 ─────────────────────────────────────────────────────────────
+
+/// ffmpeg 抱怨过时间戳没有？
+///
+/// 这几句都出现在换壳的时候：源容器没存每帧的显示时间，ffmpeg 只能按包的
+/// 顺序凑，遇到 B 帧就凑错。它自己退出码还是 0，写出来的 mp4 里 DTS 非单调，
+/// iOS 拿到这种文件直接不放。
+static bool HasTimestampTrouble(const std::string& log) {
+    static const char* kMarkers[] = {
+        "Timestamps are unset",
+        "pts has no value",
+        "non monotonically increasing",
+        "Non-monotonic DTS"
+    };
+    for (const char* marker : kMarkers) {
+        if (log.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
 
 struct ConvertCtx {
     size_t index;
@@ -391,7 +420,7 @@ static void ConvertOne(size_t index) {
         g_items[index].finished = true;
         return;
     }
-    Plan plan = DecidePlan(probe);
+    Plan plan = DecidePlan(probe, ExtOf(src));
 
     std::wstring dstDir = Join(g_outDir, relDir);
     SHCreateDirectoryExW(nullptr, dstDir.c_str(), nullptr);
@@ -414,33 +443,59 @@ static void ConvertOne(size_t index) {
     bool inPlace = (Lower(dst) == Lower(src));
     std::wstring target = inPlace ? dst + L".tmp.mp4" : dst;
 
-    std::wstring cmd = L"\"" + g_ffmpeg + L"\" -hide_banner -nostdin -y"
-        L" -i \"" + src + L"\""
-        // 只要第一路视频和第一路音频。mkv 里常带字幕流，mp4 装不下，
-        // 不显式挑的话 ffmpeg 会直接报错退出。
-        L" -map 0:V:0 -map 0:a:0? -sn -dn";
-
-    cmd += plan.copyVideo
-        ? L" -c:v copy"
-        : L" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p";
-    cmd += plan.copyAudio
-        ? L" -c:a copy"
-        : L" -c:a aac -b:a 192k";
-
-    // faststart 把索引挪到文件开头，边下边播和拖进度条才不用先读到尾
-    cmd += L" -movflags +faststart -progress pipe:1 -nostats -loglevel error";
-    cmd += L" \"" + target + L"\"";
+    auto buildCommand = [&](const Plan& p) {
+        std::wstring cmd = L"\"" + g_ffmpeg + L"\" -hide_banner -nostdin -y"
+            L" -i \"" + src + L"\""
+            // 只要第一路视频和第一路音频。mkv 里常带字幕流，mp4 装不下，
+            // 不显式挑的话 ffmpeg 会直接报错退出。
+            L" -map 0:V:0 -map 0:a:0? -sn -dn";
+        cmd += p.copyVideo
+            ? L" -c:v copy"
+            : L" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p";
+        cmd += p.copyAudio
+            ? L" -c:a copy"
+            : L" -c:a aac -b:a 192k";
+        // faststart 把索引挪到文件开头，边下边播和拖进度条才不用先读到尾。
+        // 日志留到 warning：时间戳出问题时 ffmpeg 只在这一档说话，
+        // 而它照样退出码 0，光看退出码会以为转好了。
+        cmd += L" -movflags +faststart -progress pipe:1 -nostats -loglevel warning";
+        cmd += L" \"" + target + L"\"";
+        return cmd;
+    };
 
     SetStatus(index, plan.label + L"…", 0);
 
     ConvertCtx ctx{ index, probe.duration };
     std::string tail;
-    bool ok = RunCapture(cmd, ConvertLine, &ctx, &tail);
+    bool ok = RunCapture(buildCommand(plan), ConvertLine, &ctx, &tail);
 
     if (g_cancel) {
         DeleteFileW(target.c_str());
         SetStatus(index, L"已取消", -1);
         return;
+    }
+
+    // 换壳看着成了，但 ffmpeg 抱怨过时间戳 —— 这种 mp4 在 Windows 上多半
+    // 能放，iOS 直接不认。删了重来，这次老老实实重新编码。
+    //
+    // 按容器拦（AVI）已经挡掉了绝大多数，这里是兜底：哪种容器会出这毛病
+    // 不该由我在这儿猜全，让 ffmpeg 自己说。
+    if (ok && plan.copyVideo && HasTimestampTrouble(tail)) {
+        DeleteFileW(target.c_str());
+        plan.copyVideo = false;
+        plan.label = L"重新编码（换壳后时间戳异常）";
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            if (index < g_items.size()) g_items[index].plan = plan.label;
+        }
+        SetStatus(index, plan.label + L"…", 0);
+        tail.clear();
+        ok = RunCapture(buildCommand(plan), ConvertLine, &ctx, &tail);
+        if (g_cancel) {
+            DeleteFileW(target.c_str());
+            SetStatus(index, L"已取消", -1);
+            return;
+        }
     }
 
     if (ok && inPlace) {
