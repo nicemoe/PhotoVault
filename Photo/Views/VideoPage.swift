@@ -21,19 +21,25 @@ enum ScreenOrientation {
     }
 }
 
-/// 自己接管单击和双击。
+/// 单击、双击、拖动全部自己接管。
 ///
-/// SwiftUI 里同时写 .onTapGesture(count: 2) 和 .onTapGesture 的话，
-/// 它会自动给单击加一条「等双击失败」的依赖——单击要等约 300ms 才派发，
-/// 点一下屏幕半天没反应就是这么来的。
+/// 两个原因不用 SwiftUI 的手势：
 ///
-/// UIKit 这边不加 require(toFail:)，单击立刻响应。双击时两个单击回调也会
-/// 各来一次，但单击只是开合工具栏，来两次正好抵消，看不出来。
-struct TapCatcher: UIViewRepresentable {
+/// 一、同时写 .onTapGesture(count: 2) 和 .onTapGesture 时，SwiftUI 会自动给
+/// 单击加一条「等双击失败」的依赖，单击要等约 300ms 才派发。UIKit 这边不设
+/// require(toFail:)，单击立刻响应；双击时单击回调会各来一次，但单击只是开合
+/// 工具栏，来两次正好抵消。
+///
+/// 二、拖动如果留给 SwiftUI 的 DragGesture，而触摸又落在这个 UIView 上，
+/// 两边谁先拿到、是否每帧都派发都不好确定——快进不跟手就出在这儿。
+/// 索性都用同一个识别器，onChanged 由 UIPanGestureRecognizer 直接给。
+struct GestureCatcher: UIViewRepresentable {
 
     var enabled = true
     var onSingle: () -> Void
     var onDouble: (CGPoint) -> Void
+    /// (状态, 起点, 位移)
+    var onPan: (UIGestureRecognizer.State, CGPoint, CGSize) -> Void
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -44,8 +50,10 @@ struct TapCatcher: UIViewRepresentable {
         let double = UITapGestureRecognizer(target: context.coordinator,
                                             action: #selector(Coordinator.handleDouble(_:)))
         double.numberOfTapsRequired = 2
-        // 不设 single.require(toFail: double) —— 那正是延迟的来源
-        for recognizer in [single, double] {
+        let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handlePan(_:)))
+
+        for recognizer in [single, double, pan] as [UIGestureRecognizer] {
             recognizer.cancelsTouchesInView = false
             view.addGestureRecognizer(recognizer)
         }
@@ -63,16 +71,26 @@ struct TapCatcher: UIViewRepresentable {
     final class Coordinator {
         private var onSingle: () -> Void = {}
         private var onDouble: (CGPoint) -> Void = { _ in }
+        private var onPan: (UIGestureRecognizer.State, CGPoint, CGSize) -> Void = { _, _, _ in }
+        /// 起点要在 began 时记下来：translation 是相对起点的，后面用得到
+        private var start: CGPoint = .zero
 
-        func update(_ view: TapCatcher) {
+        func update(_ view: GestureCatcher) {
             onSingle = view.onSingle
             onDouble = view.onDouble
+            onPan = view.onPan
         }
 
         @objc func handleSingle(_ gesture: UITapGestureRecognizer) { onSingle() }
 
         @objc func handleDouble(_ gesture: UITapGestureRecognizer) {
             onDouble(gesture.location(in: gesture.view))
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            if gesture.state == .began { start = gesture.location(in: gesture.view) }
+            let t = gesture.translation(in: gesture.view)
+            onPan(gesture.state, start, CGSize(width: t.x, height: t.y))
         }
     }
 }
@@ -295,17 +313,17 @@ struct VideoPage: View {
                 // 双击超时（约 300ms）确认你不会再点第二下，DragGesture 也要
                 // 先判定失败，才敢把点击派发下去——按一下暂停要等半秒才动。
                 // 分层之后，按钮的点击直接命中按钮，手势只管画面上的空白处。
-                TapCatcher(
+                GestureCatcher(
                     enabled: !locked,
                     onSingle: onSingleTap,
-                    onDouble: { point in handleDoubleTap(at: point, width: geo.size.width) }
+                    onDouble: { point in handleDoubleTap(at: point, width: geo.size.width) },
+                    onPan: { state, start, translation in
+                        handlePan(state: state, start: start,
+                                  translation: translation, size: geo.size)
+                    }
                 )
                     .contentShape(Rectangle())
                     .gesture(magnifyGesture, including: locked ? .subviews : .all)
-                    // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
-                    // 免得和相册翻页抢
-                    .gesture(dragGesture(size: geo.size, landscape: landscape),
-                             including: locked ? .subviews : .all)
 
                 if unplayable {
                     unplayableNote
@@ -807,73 +825,77 @@ struct VideoPage: View {
 
     /// 放大后拖动是平移；否则横拖快进、竖拖调亮度（左半）和音量（右半）。
     ///
-    /// 两种方向都接管——视频页已经不在 TabView 里了，左右滑不再是相册翻页，
-    /// 换上一个/下一个用底部的传输键。
-    private func dragGesture(size: CGSize, landscape: Bool) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                if scale > 1.01 {
-                    offset = CGSize(width: steadyOffset.width + value.translation.width,
-                                    height: steadyOffset.height + value.translation.height)
-                    return
-                }
-                guard !unplayable else { return }
+    /// 由 UIPanGestureRecognizer 直接驱动，changed 一定是每帧都来的。
+    private func handlePan(state: UIGestureRecognizer.State, start: CGPoint,
+                           translation: CGSize, size: CGSize) {
+        switch state {
+        case .began:
+            dragMode = nil
 
-                if dragMode == nil {
-                    let horizontal = abs(value.translation.width) > abs(value.translation.height)
-                    if horizontal {
-                        dragMode = .seek
-                        dragAnchor = current
-                        scrubbing = true
-                        // 拖的时候必须先暂停。不停的话每次 seek 完播放器立刻
-                        // 按原速继续往前跑，画面被一次次拽走，看着就是不跟手。
-                        player?.pause()
-                    } else {
-                        dragMode = value.startLocation.x < size.width / 2 ? .brightness : .volume
-                        dragAnchor = dragMode == .brightness
-                            ? Double(UIScreen.main.brightness)
-                            : Double(player?.volume ?? 1)
-                        if dragMode == .brightness, systemBrightness == nil {
-                            systemBrightness = UIScreen.main.brightness
-                        }
+        case .changed:
+            if scale > 1.01 {
+                offset = CGSize(width: steadyOffset.width + translation.width,
+                                height: steadyOffset.height + translation.height)
+                return
+            }
+            guard !unplayable else { return }
+
+            if dragMode == nil {
+                // 位移太小时方向不可信，等它走出去一点再定
+                guard abs(translation.width) > 6 || abs(translation.height) > 6 else { return }
+                if abs(translation.width) > abs(translation.height) {
+                    dragMode = .seek
+                    dragAnchor = current
+                    scrubbing = true
+                    // 拖的时候必须先暂停。不停的话每次 seek 完播放器立刻
+                    // 按原速继续往前跑，画面被一次次拽走，看着就是不跟手。
+                    player?.pause()
+                } else {
+                    dragMode = start.x < size.width / 2 ? .brightness : .volume
+                    dragAnchor = dragMode == .brightness
+                        ? Double(UIScreen.main.brightness)
+                        : Double(player?.volume ?? 1)
+                    if dragMode == .brightness, systemBrightness == nil {
+                        systemBrightness = UIScreen.main.brightness
                     }
                 }
+            }
 
-                switch dragMode {
-                case .seek:
-                    guard duration > 0 else { return }
-                    // 整屏宽度对应本片长度的一半，短片也不会一划到底
-                    let span = min(duration, max(60, duration / 2))
-                    let delta = Double(value.translation.width / size.width) * span
-                    current = min(max(0, dragAnchor + delta), duration)
-                    // 带容差，跳到最近的关键帧就行，要的是跟手
-                    seek(to: current, precise: false)
-                    show(hint: "\(timeText(current)) / \(timeText(duration))")
-                case .brightness:
-                    let delta = Double(-value.translation.height / size.height)
-                    let level = min(max(0, dragAnchor + delta), 1)
-                    UIScreen.main.brightness = CGFloat(level)
-                    show(hint: "亮度 \(Int(level * 100))%")
-                case .volume:
-                    let delta = Double(-value.translation.height / size.height)
-                    let level = min(max(0, dragAnchor + delta), 1)
-                    player?.volume = Float(level)
-                    show(hint: "音量 \(Int(level * 100))%")
-                case nil:
-                    break
+            switch dragMode {
+            case .seek:
+                guard duration > 0 else { return }
+                // 整屏宽度对应本片长度的一半，短片也不会一划到底
+                let span = min(duration, max(60, duration / 2))
+                let delta = Double(translation.width / size.width) * span
+                current = min(max(0, dragAnchor + delta), duration)
+                seek(to: current, precise: false)   // 带容差，要的是跟手
+                show(hint: "\(timeText(current)) / \(timeText(duration))")
+            case .brightness:
+                let level = min(max(0, dragAnchor + Double(-translation.height / size.height)), 1)
+                UIScreen.main.brightness = CGFloat(level)
+                show(hint: "亮度 \(Int(level * 100))%")
+            case .volume:
+                let level = min(max(0, dragAnchor + Double(-translation.height / size.height)), 1)
+                player?.volume = Float(level)
+                show(hint: "音量 \(Int(level * 100))%")
+            case nil:
+                break
+            }
+
+        case .ended, .cancelled, .failed:
+            if dragMode == .seek {
+                seek(to: current, precise: true)   // 松手落到准确位置
+                scrubbing = false
+                if isPlaying {
+                    player?.play()
+                    player?.rate = rate
                 }
             }
-            .onEnded { _ in
-                if dragMode == .seek {
-                    seek(to: current, precise: true)   // 松手落到准确位置
-                    scrubbing = false
-                    if isPlaying {
-                        player?.play()
-                        player?.rate = rate
-                    }
-                }
-                dragMode = nil
-                steadyOffset = offset
-            }
+            dragMode = nil
+            steadyOffset = offset
+
+        default:
+            break
+        }
     }
 }
