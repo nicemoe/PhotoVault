@@ -35,6 +35,11 @@ final class PlayerHostView: UIView {
         set { playerLayer.player = newValue }
     }
 
+    var gravity: AVLayerVideoGravity {
+        get { playerLayer.videoGravity }
+        set { playerLayer.videoGravity = newValue }
+    }
+
     /// 是否允许外层相册左右翻页。
     ///
     /// 横屏快进要横向拖，而 TabView 的翻页是它内部那个 UIScrollView 在做。
@@ -87,17 +92,23 @@ struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer?
     /// false 表示这一页要独占横向手势（横屏快进）
     var pagingEnabled = true
+    /// 适应（留黑边）还是填充（裁掉溢出的部分）
+    var fill = false
+
+    private var gravity: AVLayerVideoGravity { fill ? .resizeAspectFill : .resizeAspect }
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.player = player
         view.pagingEnabled = pagingEnabled
+        view.gravity = gravity
         return view
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
         if view.player !== player { view.player = player }
         if view.pagingEnabled != pagingEnabled { view.pagingEnabled = pagingEnabled }
+        if view.gravity != gravity { view.gravity = gravity }
     }
 }
 
@@ -148,6 +159,8 @@ struct VideoPage: View {
     @State private var hintToken = 0
     /// 锁住后不响应任何手势，横躺着看不会被误触打断
     @State private var locked = false
+    /// 填充：裁掉溢出的部分铺满整屏
+    @State private var fill = false
 
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
@@ -173,7 +186,8 @@ struct VideoPage: View {
                     // 横屏（全屏播放）和放大后都由本页独占横向手势，
                     // 竖屏没放大时把左右滑还给相册翻页
                     PlayerLayerView(player: player,
-                                    pagingEnabled: !(landscape || scale > 1.01))
+                                    pagingEnabled: !(landscape || scale > 1.01),
+                                    fill: fill)
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(scale)
                         .offset(offset)
@@ -187,7 +201,7 @@ struct VideoPage: View {
                 if unplayable {
                     unplayableNote
                 } else if chromeVisible {
-                    controls(landscape: landscape)
+                    controls(landscape: landscape, size: geo.size)
                         .transition(.opacity)
                 }
 
@@ -257,7 +271,7 @@ struct VideoPage: View {
     /// 控件贴着四边摆，中间留给画面。
     /// 竖屏时上面那条交给预览页的工具栏，这里只出下半部分。
     @ViewBuilder
-    private func controls(landscape: Bool) -> some View {
+    private func controls(landscape: Bool, size: CGSize) -> some View {
         if locked {
             // 锁住后只剩一个解锁键，其余手势和控件全部让开，
             // 横躺着看的时候不会被误触打断
@@ -274,7 +288,7 @@ struct VideoPage: View {
             VStack(spacing: 0) {
                 topRow
                 Spacer(minLength: 0)
-                bottomRows(landscape: landscape)
+                bottomRows(landscape: landscape, size: size)
             }
         }
     }
@@ -321,7 +335,15 @@ struct VideoPage: View {
             .first ?? .zero
     }
 
-    private func bottomRows(landscape: Bool) -> some View {
+    /// 切成填充要裁掉画面的百分之多少。视频比例和屏幕比例差得越远裁得越狠。
+    private func cropIfFilled(in size: CGSize) -> Double {
+        guard asset.width > 0, asset.height > 0, size.width > 1, size.height > 1 else { return 1 }
+        let video = Double(asset.width) / Double(asset.height)
+        let screen = Double(size.width) / Double(size.height)
+        return 1 - min(video, screen) / max(video, screen)
+    }
+
+    private func bottomRows(landscape: Bool, size: CGSize) -> some View {
         VStack(spacing: 6) {
             HStack(spacing: 12) {
                 Text(timeText(current))
@@ -345,6 +367,22 @@ struct VideoPage: View {
 
                 HStack(spacing: 4) {
                     if landscape { lockButton } else { speedMenu }
+
+                    // 只在裁得不多的时候给「铺满」这个选项。
+                    // 竖拍视频在横屏下要裁掉 74% 才能铺满，那不叫铺满，
+                    // 那是只给你看四分之一。
+                    if cropIfFilled(in: size) <= 0.25 {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { fill.toggle() }
+                        } label: {
+                            Image(systemName: fill
+                                  ? "arrow.down.right.and.arrow.up.left"
+                                  : "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 38, height: 38)
+                        }
+                    }
+
                     Spacer()
                     // 只有横拍视频转横屏才有意义：竖拍视频转过去占屏面积
                     // 从 82% 掉到 26%，越转越小。已经在横屏时始终留着，
