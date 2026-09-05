@@ -35,6 +35,11 @@ final class PlayerHostView: UIView {
         set { playerLayer.player = newValue }
     }
 
+    var gravity: AVLayerVideoGravity {
+        get { playerLayer.videoGravity }
+        set { playerLayer.videoGravity = newValue }
+    }
+
     /// 是否允许外层相册左右翻页。
     ///
     /// 横屏快进要横向拖，而 TabView 的翻页是它内部那个 UIScrollView 在做。
@@ -87,17 +92,22 @@ struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer?
     /// false 表示这一页要独占横向手势（横屏快进）
     var pagingEnabled = true
+    /// 适应（留黑边）还是填充（裁掉溢出的部分）
+    var fill = false
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.player = player
         view.pagingEnabled = pagingEnabled
+        view.gravity = fill ? .resizeAspectFill : .resizeAspect
         return view
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
         if view.player !== player { view.player = player }
         if view.pagingEnabled != pagingEnabled { view.pagingEnabled = pagingEnabled }
+        let wanted: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
+        if view.gravity != wanted { view.gravity = wanted }
     }
 }
 
@@ -118,6 +128,8 @@ struct VideoPage: View {
     /// 上一个/下一个媒体。到头了传 nil，按钮变灰。
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
+    /// 标题。优先用导入时的原始文件名，没有就用目录名。
+    var title: String = ""
     /// 从这个位置接着播。横竖屏切换时视图会重建，靠它接上进度。
     var startAt: Double = 0
     /// 视图要走了，把当前进度交出去
@@ -146,6 +158,9 @@ struct VideoPage: View {
     @State private var hintToken = 0
     /// 锁住后不响应任何手势，横躺着看不会被误触打断
     @State private var locked = false
+    /// 填充：裁掉溢出的部分铺满整屏。
+    /// 竖拍视频在横屏下只能占 26% 的面积，想铺满就只能裁。
+    @State private var fill = false
 
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
@@ -171,7 +186,8 @@ struct VideoPage: View {
                     // 横屏（全屏播放）和放大后都由本页独占横向手势，
                     // 竖屏没放大时把左右滑还给相册翻页
                     PlayerLayerView(player: player,
-                                    pagingEnabled: !(landscape || scale > 1.01))
+                                    pagingEnabled: !(landscape || scale > 1.01),
+                                    fill: fill)
                         .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(scale)
                         .offset(offset)
@@ -270,29 +286,34 @@ struct VideoPage: View {
             .padding(.leading, 20 + safeInsets.left)
         } else {
             VStack(spacing: 0) {
-                if landscape { topRow }
+                topRow
                 Spacer(minLength: 0)
                 bottomRows(landscape: landscape)
             }
         }
     }
 
-    /// 横屏顶栏：关闭 + 画质信息 + 倍速
+    /// 顶栏：左边标题 + 画质，右边倍速和关闭
     private var topRow: some View {
         HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+                Text(qualityText)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .opacity(0.7)
+            }
+
+            Spacer(minLength: 12)
+
+            speedMenu
+
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .bold))
                     .frame(width: 38, height: 38)
             }
-
-            Text(qualityText)
-                .font(.system(size: 12.5, weight: .semibold))
-                .opacity(0.75)
-
-            Spacer()
-
-            speedMenu
         }
         .foregroundStyle(.white)
         // 横屏时刘海/灵动岛在左边，画面是全屏铺的，控件必须自己让开安全区，
@@ -336,8 +357,17 @@ struct VideoPage: View {
                     }
                 }
 
-                HStack {
-                    if landscape { lockButton } else { speedMenu }
+                HStack(spacing: 4) {
+                    if landscape { lockButton }
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { fill.toggle() }
+                    } label: {
+                        Image(systemName: fill
+                              ? "arrow.down.right.and.arrow.up.left"
+                              : "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 38, height: 38)
+                    }
                     Spacer()
                     Button {
                         setLandscape(!landscape)

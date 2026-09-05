@@ -320,7 +320,7 @@ final class LibraryStore {
     // MARK: 图片
 
     /// 探测尺寸并落盘。不碰内存中的数据结构，所以可以在后台线程跑。
-    nonisolated static func persist(_ data: Data) -> Asset? {
+    nonisolated static func persist(_ data: Data, originalName: String = "") -> Asset? {
         guard let info = ImageProbe.inspect(data) else { return nil }
 
         let fileName = "\(UUID().uuidString).\(info.fileExtension)"
@@ -328,9 +328,16 @@ final class LibraryStore {
         guard (try? data.write(to: url, options: .atomic)) != nil else { return nil }
 
         return Asset(fileName: fileName,
+                     originalName: Self.displayName(from: originalName),
                      width: info.width,
                      height: info.height,
                      byteCount: data.count)
+    }
+
+    /// 取文件名里最后一段并去掉扩展名。网页拖文件夹上来时带的是相对路径。
+    nonisolated static func displayName(from raw: String) -> String {
+        let last = raw.split(separator: "/").last.map(String.init) ?? raw
+        return (last as NSString).deletingPathExtension
     }
 
     /// 把已落盘的图片挂到目录下（只动内存结构，必须在主线程）
@@ -348,13 +355,13 @@ final class LibraryStore {
 
     /// 落盘 + 挂载一步到位。磁盘 IO 在后台线程，主线程只做数组插入。
     @discardableResult
-    func addImage(data: Data, to folderID: UUID) async -> Asset? {
+    func addImage(data: Data, to folderID: UUID, name: String = "") async -> Asset? {
         guard folder(folderID) != nil else { return nil }
 
         // Task.detached 的尾随闭包不能直接写在 guard 条件里：
         // 编译器会把那个 { 当成 guard 的语句块开头。先把任务提出来。
         let work = Task.detached(priority: .userInitiated) {
-            LibraryStore.persist(data)
+            LibraryStore.persist(data, originalName: name)
         }
         guard let asset = await work.value else { return nil }
 
@@ -367,7 +374,7 @@ final class LibraryStore {
     ///
     /// 视频不能像图片那样先读成 Data——手机拍的 1 分钟 4K 就有几百 MB，
     /// 读进内存直接会被系统杀掉。这里只做文件搬移和元信息探测。
-    nonisolated static func persistVideo(from source: URL) async -> Asset? {
+    nonisolated static func persistVideo(from source: URL, originalName: String = "") async -> Asset? {
         let ext = source.pathExtension.isEmpty ? "mov" : source.pathExtension.lowercased()
         let fileName = "\(UUID().uuidString).\(ext)"
         let target = Paths.media.appendingPathComponent(fileName)
@@ -385,6 +392,7 @@ final class LibraryStore {
         let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int) ?? 0
 
         return Asset(fileName: fileName,
+                     originalName: Self.displayName(from: originalName),
                      kind: .video,
                      width: info.width,
                      height: info.height,
@@ -393,9 +401,9 @@ final class LibraryStore {
     }
 
     @discardableResult
-    func addVideo(from source: URL, to folderID: UUID) async -> Asset? {
+    func addVideo(from source: URL, to folderID: UUID, name: String = "") async -> Asset? {
         guard folder(folderID) != nil else { return nil }
-        guard let asset = await LibraryStore.persistVideo(from: source) else { return nil }
+        guard let asset = await LibraryStore.persistVideo(from: source, originalName: name) else { return nil }
         return attach(asset, to: folderID) ? asset : nil
     }
 

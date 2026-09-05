@@ -203,10 +203,10 @@ final class WiFiService {
                     let name = part.fileName ?? ""
                     let target = resolveFolder(for: name, under: folderID)
                     if isVideoName(name) {
-                        if await store.addVideo(from: part.fileURL, to: target) != nil { saved += 1 }
+                        if await store.addVideo(from: part.fileURL, to: target, name: name) != nil { saved += 1 }
                         else { skipped += 1 }
                     } else if let data = try? Data(contentsOf: part.fileURL),
-                              await store.addImage(data: data, to: target) != nil {
+                              await store.addImage(data: data, to: target, name: name) != nil {
                         saved += 1
                     } else {
                         skipped += 1
@@ -224,7 +224,8 @@ final class WiFiService {
                     // 而不是把里面的文件全抖到当前目录
                     let target = resolveFolder(for: part.fileName ?? "", under: folderID)
                     // 落盘在后台，主线程只在 attach 时短暂持有
-                    if await store.addImage(data: part.data, to: target) != nil {
+                    if await store.addImage(data: part.data, to: target,
+                                            name: part.fileName ?? "") != nil {
                         saved += 1
                     } else {
                         skipped += 1

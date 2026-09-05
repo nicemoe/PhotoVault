@@ -12,6 +12,10 @@ struct Asset: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     /// 存放在 Documents/Media/ 下的文件名
     var fileName: String
+    /// 导入时的原始文件名（不含扩展名）。
+    /// 磁盘上存的是 UUID 文件名，没有它就没有任何可显示的标题。
+    /// 从系统相册选的照片拿不到文件名，这里会是空的。
+    var originalName: String = ""
     var kind: AssetKind = .image
     var width: Int = 0
     var height: Int = 0
@@ -20,11 +24,13 @@ struct Asset: Identifiable, Codable, Hashable {
     var duration: Double = 0
     var createdAt: Date = Date()
 
-    init(id: UUID = UUID(), fileName: String, kind: AssetKind = .image,
+    init(id: UUID = UUID(), fileName: String, originalName: String = "",
+         kind: AssetKind = .image,
          width: Int = 0, height: Int = 0, byteCount: Int = 0,
          duration: Double = 0, createdAt: Date = Date()) {
         self.id = id
         self.fileName = fileName
+        self.originalName = originalName
         self.kind = kind
         self.width = width
         self.height = height
@@ -40,6 +46,7 @@ struct Asset: Identifiable, Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         fileName = try c.decodeIfPresent(String.self, forKey: .fileName) ?? ""
+        originalName = try c.decodeIfPresent(String.self, forKey: .originalName) ?? ""
         kind = try c.decodeIfPresent(AssetKind.self, forKey: .kind) ?? .image
         width = try c.decodeIfPresent(Int.self, forKey: .width) ?? 0
         height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0

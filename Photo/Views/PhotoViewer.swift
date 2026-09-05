@@ -95,7 +95,11 @@ struct PhotoViewer: View {
             // 播放控件由视频页自己出，两套栏叠在一起会互相压住
             if showChrome, !isLandscapeVideo {
                 VStack {
-                    topBar(total: live.count, position: position)
+                    // 视频页的顶栏（标题、画质、倍速、关闭）由播放器自己出，
+                    // 两种方向一致；这里再来一条就重复了
+                    if !onDarkSurface {
+                        topBar(total: live.count, position: position)
+                    }
                     Spacer()
                     bottomBar(current)
                 }
@@ -217,6 +221,10 @@ struct PhotoViewer: View {
                   onClose: { dismiss() },
                   onPrevious: neighbour(of: asset, in: live, step: -1),
                   onNext: neighbour(of: asset, in: live, step: 1),
+                  // 从相册选的视频拿不到文件名，退回用目录名
+                  title: asset.originalName.isEmpty
+                       ? (store.folder(folderID)?.name ?? "")
+                       : asset.originalName,
                   // 横竖屏切换时这个视图会重建，用它把进度接上
                   startAt: resumeAsset == asset.id ? resumeTime : 0,
                   onLeave: { time in
