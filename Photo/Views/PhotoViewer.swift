@@ -49,10 +49,12 @@ struct PhotoViewer: View {
     private var controlTint: Color { onDarkSurface ? .white : Theme.viewerLabel }
 
     var body: some View {
+        // 这一层不要 ignoresSafeArea：上下两条栏（关闭、分享、删除）得留在
+        // 安全区里，越界的话按钮会被状态栏和 home 指示条压住。
+        // 需要全屏铺的是画面本身，那由背景、TabView 和视频页各自声明。
         GeometryReader { proxy in
             viewer(landscape: proxy.size.width > proxy.size.height)
         }
-        .ignoresSafeArea()
     }
 
     private func viewer(landscape: Bool) -> some View {

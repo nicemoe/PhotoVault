@@ -77,6 +77,54 @@ struct TapCatcher: UIViewRepresentable {
     }
 }
 
+/// 拖动时的 seek 泵。
+///
+/// 手指每移动一帧就发一次 seek 的话，AVPlayer 处理不过来会把中间那些丢掉
+/// 或排队，画面卡在原处不动，直到松手才跳——看着就像「只有松手才生效」。
+/// 同一时刻只让一个 seek 在飞，期间来的新位置只留最新那个，
+/// 上一个完成时再接着发。
+@MainActor
+final class SeekPump {
+
+    private weak var player: AVPlayer?
+    private var inFlight = false
+    private var pending: Double?
+
+    func attach(_ player: AVPlayer?) {
+        self.player = player
+        inFlight = false
+        pending = nil
+    }
+
+    /// 拖动过程用：带容差，跳到最近的关键帧就行，要的是跟手
+    func scrub(to seconds: Double) {
+        guard let player else { return }
+        guard !inFlight else {
+            pending = seconds
+            return
+        }
+        inFlight = true
+        player.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600)) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.inFlight = false
+                if let next = self.pending {
+                    self.pending = nil
+                    self.scrub(to: next)
+                }
+            }
+        }
+    }
+
+    /// 松手、点进度条、跳 ±10 秒用：落到准确位置
+    func settle(to seconds: Double) {
+        pending = nil
+        inFlight = false
+        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
+                     toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+}
+
 /// 承载 AVPlayerLayer 的裸视图。
 ///
 /// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
@@ -206,6 +254,9 @@ struct VideoPage: View {
 
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
+
+    /// 拖动时合并 seek 请求
+    @State private var pump = SeekPump()
 
     /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
     private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
@@ -607,6 +658,7 @@ struct VideoPage: View {
         made.actionAtItemEnd = .pause
         made.defaultRate = rate
         player = made
+        pump.attach(made)
         duration = asset.duration
 
         // 每 0.2 秒刷一次进度；拖动过程中不要被回调顶回去
@@ -651,6 +703,7 @@ struct VideoPage: View {
         if current > 0.5 { onLeave?(current) }
         player?.pause()
         player = nil
+        pump.attach(nil)
         isPlaying = false
         current = 0
         scale = 1; steadyScale = 1
@@ -674,12 +727,7 @@ struct VideoPage: View {
     /// precise=false 时把容差交给系统，跳到最近的关键帧就行——
     /// 拖动过程中每帧都做精确 seek 会明显卡顿。
     private func seek(to seconds: Double, precise: Bool = true) {
-        let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
-        if precise {
-            player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        } else {
-            player?.seek(to: time)
-        }
+        if precise { pump.settle(to: seconds) } else { pump.scrub(to: seconds) }
     }
 
     private func setRate(_ value: Float) {
