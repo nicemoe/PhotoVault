@@ -28,6 +28,7 @@ struct FolderDetailView: View {
     @State private var renameText = ""
     @State private var deletingFolder: Folder?
     @State private var movingFolder: Folder?
+    @State private var showReorder = false
 
     /// 照片用固定三列
     private var layout: CardGridLayout {
@@ -55,7 +56,9 @@ struct FolderDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
+        @Bindable var store = store
+
+        return ScrollView {
             if let folder {
                 VStack(alignment: .leading, spacing: 16) {
                     breadcrumb
@@ -104,6 +107,7 @@ struct FolderDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbar {
+            // 和首页一样：右上角只有加号和三条杠，选择、排序都收进三条杠
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 0) {
                     if isSelecting {
@@ -115,17 +119,6 @@ struct FolderDetailView: View {
                         }
                         .font(.system(size: 16, weight: .semibold))
                     } else {
-                        if !(folder?.assets.isEmpty ?? true) {
-                            Button {
-                                withAnimation(.easeOut(duration: 0.18)) { isSelecting = true }
-                            } label: {
-                                // 用纯 checkmark，不要 checkmark.circle——
-                                // 外面已经有圆底了，再套一个圆就是圆中圆
-                                Image(systemName: "checkmark").circleIcon(glyph: 13)
-                            }
-                            .buttonStyle(.plain)
-                        }
-
                         Menu {
                             Button {
                                 newFolderName = ""
@@ -146,6 +139,19 @@ struct FolderDetailView: View {
                             }
                         } label: {
                             Image(systemName: "plus").circleIcon()
+                        }
+
+                        PageMenu {
+                            if !(folder?.assets.isEmpty ?? true) {
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.18)) { isSelecting = true }
+                                } label: {
+                                    Label("选择", systemImage: "checkmark.circle")
+                                }
+                            }
+                            if !children.isEmpty {
+                                SortMenuSection(mode: $store.folderSort) { showReorder = true }
+                            }
                         }
                     }
                 }
@@ -169,6 +175,10 @@ struct FolderDetailView: View {
             PhotoViewer(assets: context.assets, startIndex: context.index, folderID: folderID)
         }
         .sheet(isPresented: $showWiFi) { WiFiTransferView() }
+        .sheet(isPresented: $showReorder) {
+            // 只重排本目录下的这一层子目录
+            ReorderFoldersSheet(groupID: groupID ?? UUID(), parentID: folderID)
+        }
         .sheet(isPresented: $showMoveSheet) {
             DestinationPickerSheet(title: "移动 \(selection.count) 张照片", excludingFolder: folderID) { target in
                 let ids = selection
@@ -394,42 +404,55 @@ struct FolderDetailView: View {
 
     // MARK: 多选操作条
 
+    /// 多选操作条：左边一个全选勾选框，右边移动和删除两个图标。
+    /// 不用带文字的按钮——一排方块把这条压得又高又满，图标就够了。
     private var selectionBar: some View {
-        HStack(spacing: 12) {
+        let allSelected = !assets.isEmpty && selection.count == assets.count
+
+        return HStack(spacing: 6) {
             Button {
-                if selection.count == assets.count {
-                    selection.removeAll()
-                } else {
-                    selection = Set(assets.map(\.id))
+                selection = allSelected ? [] : Set(assets.map(\.id))
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(allSelected ? Theme.accent : Theme.secondaryLabel)
+                    Text(selection.isEmpty ? "全选" : "已选 \(selection.count)")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.label)
+                        .monospacedDigit()
                 }
-            } label: {
-                Text(selection.count == assets.count ? "取消全选" : "全选")
+                .padding(.vertical, 6)
+                .padding(.trailing, 6)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(SecondaryButtonStyle())
+            .buttonStyle(.plain)
 
-            Button {
-                showMoveSheet = true
-            } label: {
-                Label("移动", systemImage: "arrow.right.square")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(selection.isEmpty)
+            Spacer()
 
-            Button {
-                showDeleteConfirm = true
-            } label: {
-                Label("删除", systemImage: "trash")
-            }
-            .buttonStyle(PrimaryButtonStyle(tint: Theme.danger))
-            .disabled(selection.isEmpty)
+            selectionAction("arrow.right.square", tint: Theme.accent) { showMoveSheet = true }
+            selectionAction("trash", tint: Theme.danger) { showDeleteConfirm = true }
         }
-        .opacity(selection.isEmpty ? 0.75 : 1)
         .padding(.horizontal, Theme.Metric.margin)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(.regularMaterial)
         .overlay(alignment: .top) {
             Rectangle().fill(Theme.hairline).frame(height: 1)
         }
+    }
+
+    private func selectionAction(_ icon: String, tint: Color,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 44, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(selection.isEmpty)
+        .opacity(selection.isEmpty ? 0.3 : 1)
     }
 
     // MARK: 导入

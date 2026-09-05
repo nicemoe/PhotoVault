@@ -79,10 +79,9 @@ struct GroupDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbarBackground(Theme.background, for: .navigationBar)
         .toolbar {
+            // 和首页一样：右上角只有加号和三条杠，排序收进三条杠
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 0) {
-                    SortMenu(mode: $store.folderSort) { showReorder = true }
-
                     Menu {
                         Button {
                             newFolderName = ""
@@ -98,6 +97,10 @@ struct GroupDetailView: View {
                         }
                     } label: {
                         Image(systemName: "plus").circleIcon()
+                    }
+
+                    PageMenu {
+                        SortMenuSection(mode: $store.folderSort) { showReorder = true }
                     }
                 }
             }

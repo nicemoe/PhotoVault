@@ -120,8 +120,9 @@ struct RootView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 0) {
                         addMenu
-                        SortMenu(mode: $store.groupSort) { showReorder = true }
-                        sideMenu
+                        PageMenu {
+                            SortMenuSection(mode: $store.groupSort) { showReorder = true }
+                        }
                     }
                 }
             }
@@ -253,38 +254,6 @@ struct RootView: View {
 
         } label: {
             Image(systemName: "plus").circleIcon()
-        }
-    }
-
-    // MARK: 左上角菜单
-    //
-    // 三条杠是「容器」语义，不需要表达里面装了什么，所以不用再纠结
-    // 「哪个图标代表外观」；以后要加别的设置也有地方放。
-    // 加号保持纯粹的「添加」，两者语义不重叠。
-
-    private var sideMenu: some View {
-        Menu {
-            // 外观作为一个条目收在这里，点开才是三个选项。
-            // 不把三个选项直接铺在第一层，是为了给后续功能留位置。
-            Menu {
-                Picker("", selection: Binding(
-                    get: { store.appearance },
-                    set: { store.appearance = $0 }
-                )) {
-                    ForEach(AppTheme.allCases) { theme in
-                        Label(theme.title, systemImage: theme.icon).tag(theme)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                // 一级条目直接显示当前选中的值（跟随系统 / 浅色 / 深色），
-                // 不要再加「外观」前缀——展开后的对勾已经说明了它是什么
-                Label(store.appearance.title, systemImage: store.appearance.icon)
-            }
-        } label: {
-            // 三条杠是自己画的，宽度/线宽/行距各自独立可调，
-            // 见 HamburgerIcon 里的说明
-            HamburgerIcon().circleIcon()
         }
     }
 

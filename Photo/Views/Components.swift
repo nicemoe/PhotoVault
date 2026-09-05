@@ -311,7 +311,47 @@ struct EmptyState: View {
 
 // MARK: - 排序菜单
 
-struct SortMenu: View {
+/// 三条杠菜单。各级页面共用：上半部分是本页专属的动作（排序、选择…），
+/// 下半部分是全局的外观设置。
+///
+/// 各级页面右上角一律只有「+」和「三条杠」两个按钮，别的功能都收进来——
+/// 排序、多选这些一页一个样，摆在外面会让每层的工具栏都长得不一样。
+struct PageMenu<Content: View>: View {
+
+    @Environment(LibraryStore.self) private var store
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        @Bindable var store = store
+
+        Menu {
+            content
+
+            Divider()
+
+            // 外观作为一个条目收在这里，点开才是三个选项。
+            // 一级条目直接显示当前选中的值（跟随系统 / 浅色 / 深色），
+            // 不要再加「外观」前缀——展开后的对勾已经说明了它是什么。
+            Menu {
+                Picker("", selection: $store.appearance) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Label(theme.title, systemImage: theme.icon).tag(theme)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label(store.appearance.title, systemImage: store.appearance.icon)
+            }
+        } label: {
+            // 三条杠是自己画的，宽度/线宽/行距各自独立可调，
+            // 见 HamburgerIcon 里的说明
+            HamburgerIcon().circleIcon()
+        }
+    }
+}
+
+/// 排序条目，放进 PageMenu 里用
+struct SortMenuSection: View {
     @Binding var mode: SortMode
     var onManualReorder: () -> Void
 
@@ -329,8 +369,8 @@ struct SortMenu: View {
                 Label("手动调整顺序…", systemImage: "arrow.up.arrow.down.square")
             }
         } label: {
-            // 这个字形是左右并排两个箭头，比 plus 宽得多，字号要相应压小
-            Image(systemName: "arrow.up.arrow.down").circleIcon(glyph: 11.5)
+            // 和外观那条一样，一级条目直接显示当前选的排序方式
+            Label(mode.title, systemImage: mode.icon)
         }
     }
 }
