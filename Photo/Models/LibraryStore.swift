@@ -406,7 +406,16 @@ final class LibraryStore {
     /// 视频不能像图片那样先读成 Data——手机拍的 1 分钟 4K 就有几百 MB，
     /// 读进内存直接会被系统杀掉。这里只做文件搬移和元信息探测。
     nonisolated static func persistVideo(from source: URL, originalName: String = "") async -> Asset? {
-        let ext = source.pathExtension.isEmpty ? "mov" : source.pathExtension.lowercased()
+        // 扩展名优先按原始文件名取。
+        //
+        // 网页上传那条路的临时文件是个纯 UUID，一点后缀都没有：只看 source 的话
+        // 会一律落成 .mov——存的是 mp4，名字却挂着 .mov。AVURLAsset 是按扩展名
+        // 定 UTI 再挑解析器的，对得上就打得开，对不上就是「读不出时长和尺寸」，
+        // 最后在播放页显示成「这个格式无法播放」。同一个文件从「导入」文件夹
+        // 或系统相册进来却是好的，因为那两条路都带着真扩展名。
+        var ext = (originalName as NSString).pathExtension.lowercased()
+        if ext.isEmpty { ext = source.pathExtension.lowercased() }
+        if ext.isEmpty { ext = "mp4" }
         let fileName = "\(UUID().uuidString).\(ext)"
         let target = Paths.media.appendingPathComponent(fileName)
 
