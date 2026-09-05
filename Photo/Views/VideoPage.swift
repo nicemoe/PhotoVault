@@ -239,20 +239,10 @@ struct VideoPage: View {
 
             Spacer()
 
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 HStack(spacing: 10) {
                     Text(timeText(current))
-                    Slider(value: Binding(
-                        get: { duration > 0 ? min(current / duration, 1) : 0 },
-                        set: { ratio in
-                            current = ratio * duration
-                            seek(to: current)
-                        }
-                    ), onEditingChanged: { editing in
-                        scrubbing = editing
-                        // 松手后再恢复播放，拖的过程中让画面跟着走
-                        if !editing, isPlaying { player?.play() }
-                    })
+                    progressBar
                     Text(timeText(duration))
                 }
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -290,6 +280,55 @@ struct VideoPage: View {
             .padding(.horizontal, 16)
             .padding(.bottom, landscape ? 24 : 118)   // 竖屏要让开底栏
         }
+    }
+
+    /// 进度条：点哪儿跳哪儿，也能按住横拖。
+    ///
+    /// 不用 Slider——那个圆钮必须先精确按住才能拖，条本身点了没反应，
+    /// 在视频上是最别扭的一种交互。
+    private var progressBar: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let ratio = duration > 0 ? min(max(0, current / duration), 1) : 0
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(0.25))
+                Capsule()
+                    .fill(.white)
+                    .frame(width: max(0, width * ratio))
+                // 播放头：拖的时候放大一点，让人知道抓住了
+                Circle()
+                    .fill(.white)
+                    .frame(width: scrubbing ? 12 : 8, height: scrubbing ? 12 : 8)
+                    .offset(x: max(0, width * ratio - (scrubbing ? 6 : 4)))
+            }
+            .frame(height: 4)
+            .frame(maxHeight: .infinity)
+            // 条只有 4pt 高，手指够不着，靠这个把可点区域撑到 28pt
+            .contentShape(Rectangle())
+            .gesture(
+                // minimumDistance 为 0，单击也会走 onChanged，点哪儿就跳哪儿
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard duration > 0 else { return }
+                        scrubbing = true
+                        current = min(max(0, value.location.x / width), 1) * duration
+                        seek(to: current, precise: false)   // 拖的过程要快，容差交给系统
+                    }
+                    .onEnded { value in
+                        guard duration > 0 else { return }
+                        current = min(max(0, value.location.x / width), 1) * duration
+                        seek(to: current, precise: true)    // 松手落到准确位置
+                        scrubbing = false
+                        if isPlaying {
+                            player?.play()
+                            player?.rate = rate
+                        }
+                    }
+            )
+        }
+        .frame(height: 28)
     }
 
     private func controlChip(_ text: String, icon: String) -> some View {
@@ -373,9 +412,15 @@ struct VideoPage: View {
         isPlaying.toggle()
     }
 
-    private func seek(to seconds: Double) {
-        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
-                     toleranceBefore: .zero, toleranceAfter: .zero)
+    /// precise=false 时把容差交给系统，跳到最近的关键帧就行——
+    /// 拖动过程中每帧都做精确 seek 会明显卡顿。
+    private func seek(to seconds: Double, precise: Bool = true) {
+        let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        if precise {
+            player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        } else {
+            player?.seek(to: time)
+        }
     }
 
     private func setRate(_ value: Float) {
