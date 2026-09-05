@@ -29,6 +29,18 @@ extension LibraryStore {
             let url = file.url
 
             if MediaFormats.isVideo(fileName: name) {
+                // 先探一次再收。
+                //
+                // 从电脑往这个文件夹拷东西的时候，App 一切到前台就开扫，
+                // 很可能撞上还没拷完的文件。半个文件 AVFoundation 连时长都
+                // 读不出来，收进去就成了一条永远显示「不支持」的记录，而
+                // 电脑上那个文件后来是好的——查起来毫无头绪。
+                //
+                // 读不出来就先留着，下次回到前台再试。宁可晚一轮，
+                // 也别把半个文件收成一条坏记录。
+                let info = await VideoProbe.inspect(url)
+                guard info.duration > 0 || info.width > 0 else { continue }
+
                 // 视频不读进内存：几百 MB 一读就被系统杀。
                 // addVideo 内部是搬文件，搬走之后源文件自然就没了。
                 if await addVideo(from: url, to: folderID, name: name) != nil { saved += 1 }
