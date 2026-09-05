@@ -182,31 +182,32 @@ struct GroupCard: View {
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topLeading) {
+                    // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块
                     Circle()
                         .fill(Theme.color(at: group.colorIndex))
-                        .frame(width: 10, height: 10)
-                        .padding(10)
+                        .frame(width: 8, height: 8)
+                        .padding(7)
                         .background(
                             Circle()
                                 .fill(.ultraThinMaterial)
-                                .frame(width: 26, height: 26)
+                                .frame(width: 20, height: 20)
                         )
-                        .padding(8)
+                        .padding(6)
                 }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(group.name)
-                    .font(.system(size: 15.5, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Theme.label)
                     .lineLimit(1)
 
                 Text("\(group.folderCount) 个目录 · \(group.photoCount) 张")
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 10)
+            .padding(.top, 7)
         }
     }
 }
@@ -250,17 +251,17 @@ struct FolderCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(folder.name)
-                    .font(.system(size: 15.5, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Theme.label)
                     .lineLimit(1)
 
                 Text(caption)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 10)
+            .padding(.top, 7)
         }
     }
 }

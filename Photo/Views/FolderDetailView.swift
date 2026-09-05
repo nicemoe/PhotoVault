@@ -43,7 +43,7 @@ struct FolderDetailView: View {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
                               gap: Theme.Metric.cardGap,
-                              preferredItemWidth: 190)
+                              preferredItemWidth: 118)
     }
 
     private var folder: Folder? { store.folder(folderID) }
@@ -287,7 +287,7 @@ struct FolderDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("子目录", count: children.count)
 
-            LazyVGrid(columns: folderLayout.columns, spacing: 20) {
+            LazyVGrid(columns: folderLayout.columns, spacing: 16) {
                 ForEach(children) { sub in
                     Button {
                         path.append(.folder(sub.id))

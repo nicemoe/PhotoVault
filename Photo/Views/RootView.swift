@@ -31,7 +31,7 @@ struct RootView: View {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
                               gap: Theme.Metric.cardGap,
-                              preferredItemWidth: 190)
+                              preferredItemWidth: 118)
     }
 
     var body: some View {
@@ -72,7 +72,7 @@ struct RootView: View {
                                     .foregroundStyle(Theme.secondaryLabel)
                             }
 
-                            LazyVGrid(columns: layout.columns, spacing: 20) {
+                            LazyVGrid(columns: layout.columns, spacing: 16) {
                                 ForEach(store.sortedGroups) { group in
                                     Button {
                                         path.append(.group(group.id))

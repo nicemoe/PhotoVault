@@ -22,7 +22,7 @@ struct GroupDetailView: View {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
         return CardGridLayout(contentWidth: max(1, width - Theme.Metric.margin * 2),
                               gap: Theme.Metric.cardGap,
-                              preferredItemWidth: 190)
+                              preferredItemWidth: 118)
     }
 
     private var group: PhotoGroup? { store.group(groupID) }
@@ -48,7 +48,7 @@ struct GroupDetailView: View {
                         }
                         .padding(.top, 20)
                     } else {
-                        LazyVGrid(columns: layout.columns, spacing: 20) {
+                        LazyVGrid(columns: layout.columns, spacing: 16) {
                             ForEach(group.rootFolders.sorted(by: store.folderSort)) { folder in
                                 Button {
                                     path.append(.folder(folder.id))
