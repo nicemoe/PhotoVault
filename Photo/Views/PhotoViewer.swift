@@ -16,7 +16,6 @@ struct PhotoViewer: View {
     // 用 id 而不是下标做 selection：删掉中间某张后下标会整体前移，翻页会串图
     @State private var currentID: UUID?
     @State private var showChrome = true
-    @State private var showDeleteConfirm = false
     @State private var isPlaying = false
     /// 横竖屏切换会把播放页整个重建，用这两个把进度接上
     @State private var resumeAsset: UUID?
@@ -106,9 +105,9 @@ struct PhotoViewer: View {
             // 删除在外面的列表里长按或多选都能做。
             if showChrome, !onDarkSurface {
                 VStack {
-                    topBar(total: live.count, position: position)
+                    topBar(current)
                     Spacer()
-                    bottomBar(current)
+                    bottomBar(total: live.count, position: position)
                 }
                 .transition(.opacity)
             }
@@ -134,18 +133,6 @@ struct PhotoViewer: View {
             // 退出预览时把方向掰回竖屏，别把整个 App 留在横屏上
             ScreenOrientation.request(landscape: false)
         }
-        .confirmationDialog(current?.isVideo == true ? "删除这个视频？" : "删除这张照片？",
-                            isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("删除", role: .destructive) {
-                guard let asset = current, let position else { return }
-                // 先选好删完之后要停在哪一张：优先下一张，没有就上一张
-                let next = position + 1 < live.count ? live[position + 1].id
-                         : (position > 0 ? live[position - 1].id : nil)
-                store.deleteAssets([asset.id], from: folderID)
-                if let next { currentID = next } else { dismiss() }
-            }
-            Button("取消", role: .cancel) {}
-        }
         // initial: true —— 进来时目录就已经空了的话，count 不会再变化，得靠首次求值兜底
         .onChange(of: live.count, initial: true) { _, count in
             if count == 0 { dismiss() }
@@ -161,59 +148,42 @@ struct PhotoViewer: View {
 
     // MARK: 顶栏
 
-    private func topBar(total: Int, position: Int?) -> some View {
-        HStack {
+    /// 和视频页一个布局：左边标题和尺寸，右边关闭。
+    private func topBar(_ asset: Asset?) -> some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title(for: asset))
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+                if let asset {
+                    Text("\(asset.width) × \(asset.height) · \(byteText(asset.byteCount))")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .opacity(0.7)
+                }
+            }
+
+            Spacer(minLength: 12)
+
             Button {
                 dismiss()
             } label: {
-                topCircle {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(controlTint)
-                }
-            }
-
-            Spacer()
-
-            if total > 0 {
-                Text("\((position ?? 0) + 1) / \(total)")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(controlTint)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 7)
-                    .background {
-                        if onDarkSurface {
-                            Capsule().fill(.black.opacity(0.42))
-                                .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
-                        } else {
-                            Capsule().fill(.ultraThinMaterial)
-                                .overlay(Capsule().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
-                        }
-                    }
-            }
-
-            Spacer()
-
-            // 视频页不放幻灯片按钮：画面正中已经有一个播放键，
-            // 右上角再来一个，谁也说不清点哪个是播这段视频
-            if onDarkSurface {
-                Color.clear.frame(width: 38, height: 38)
-            } else {
-                Button {
-                    isPlaying.toggle()
-                } label: {
-                    topCircle(highlighted: isPlaying) {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(isPlaying ? Color.white : controlTint)
-                    }
-                }
-                .disabled(total < 2)
-                .opacity(total < 2 ? 0.35 : 1)
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 38, height: 38)
+                    .contentShape(Rectangle())
             }
         }
-        .padding(.horizontal, 16)
+        .foregroundStyle(controlTint)
+        .padding(.horizontal, 20)
         .padding(.top, 8)
+    }
+
+    /// 从相册导入的拿不到文件名，退回用目录名
+    private func title(for asset: Asset?) -> String {
+        guard let asset, !asset.originalName.isEmpty else {
+            return store.folder(folderID)?.name ?? ""
+        }
+        return asset.originalName
     }
 
     private func videoPage(for asset: Asset, in live: [Asset]) -> some View {
@@ -256,72 +226,47 @@ struct PhotoViewer: View {
 
     // MARK: 底栏
 
-    private func bottomBar(_ current: Asset?) -> some View {
-        HStack(spacing: 26) {
-            if let asset = current {
-                // 不用 ShareLink：它在 fullScreenCover 里经常唤不起系统分享面板。
-                // 直接用 UIKit 从最上层的 controller present，行为可控。
-                Button {
-                    ShareSheet.present(fileURL: LibraryStore.fileURL(for: asset))
-                } label: {
-                    viewerIcon("square.and.arrow.up")
-                }
+    /// 只留序号和幻灯片的播放键。分享去掉；删除在外面的列表里长按或多选
+    /// 都能做，压在画面上既重复又挡图。
+    private func bottomBar(total: Int, position: Int?) -> some View {
+        VStack(spacing: 4) {
+            if total > 0 {
+                Text("\((position ?? 0) + 1) / \(total)")
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .opacity(0.75)
+            }
 
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("\(asset.width) × \(asset.height)")
-                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    Text(asset.isVideo
-                         ? "\(asset.durationText) · \(byteText(asset.byteCount))"
-                         : byteText(asset.byteCount))
-                        .font(.system(size: 11))
-                        .opacity(0.7)
-                }
-                .foregroundStyle(controlTint)
-
-                Spacer()
-
-                Button {
-                    showDeleteConfirm = true
-                } label: {
-                    viewerIcon("trash")
-                }
+            HStack(spacing: 30) {
+                transportButton("backward.end.fill", enabled: (position ?? 0) > 0) { step(-1) }
+                transportButton(isPlaying ? "pause.fill" : "play.fill",
+                                size: 26, enabled: total > 1) { isPlaying.toggle() }
+                transportButton("forward.end.fill", enabled: (position ?? 0) + 1 < total) { step(1) }
             }
         }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 14)
-        .background(.ultraThinMaterial)
+        .foregroundStyle(controlTint)
+        .padding(.bottom, 8)
     }
 
-    /// 底栏的图标。底栏本身有毛玻璃背景，所以图标只要够粗就行。
-    private func viewerIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(controlTint)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())   // 让整个方框可点，而不是只有图标的不透明像素
+    private func transportButton(_ icon: String, size: CGFloat = 20, enabled: Bool = true,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .semibold))
+                .frame(width: 54, height: 46)
+                .contentShape(Rectangle())
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.3)
     }
 
-    /// 顶栏的圆形按钮。它悬在画面上，背后可能是任意颜色的照片或视频，
-    /// 所以底色不能只有 10% ——那在浅色画面上几乎看不见。
-    /// 深色画面（视频）上用半透明黑加白描边，浅色画面上用毛玻璃。
-    private func topCircle<Content: View>(highlighted: Bool = false,
-                                          @ViewBuilder content: () -> Content) -> some View {
-        content()
-            .frame(width: 38, height: 38)
-            .background {
-                if highlighted {
-                    Circle().fill(Theme.accent)
-                } else if onDarkSurface {
-                    Circle().fill(.black.opacity(0.42))
-                        .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 0.8))
-                } else {
-                    Circle().fill(.ultraThinMaterial)
-                        .overlay(Circle().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
-                }
-            }
-            .contentShape(Circle())
+    /// 上一张 / 下一张
+    private func step(_ delta: Int) {
+        let live = liveAssets
+        guard let index = live.firstIndex(where: { $0.id == currentID }) else { return }
+        let target = index + delta
+        guard live.indices.contains(target) else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { currentID = live[target].id }
     }
 
     private func byteText(_ bytes: Int) -> String {
