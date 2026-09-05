@@ -904,6 +904,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+/// 命令行上带的文件和文件夹直接入队。
+/// 这样在资源管理器里选中一堆视频拖到 exe 图标上、或者用「发送到」，
+/// 都能一次全丢进来，不用开程序再拖一遍。
+static void AddFromCommandLine() {
+    int count = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!argv) return;
+    for (int i = 1; i < count; ++i) {   // argv[0] 是程序自己
+        std::wstring path = argv[i];
+        if (IsDir(path)) AddFolder(path, NameOf(path));
+        else if (IsVideoFile(path)) AddOne(path, L"");
+    }
+    LocalFree(argv);
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     SetProcessDPIAware();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -935,6 +950,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_MYVIDEO, nullptr, 0, videos))) {
         SetWindowTextW(g_outEdit, Join(videos, L"手机视频").c_str());
     }
+
+    AddFromCommandLine();
+    RefreshList();
 
     if (g_ffmpeg.empty() || g_ffprobe.empty()) {
         SetWindowTextW(g_status,
