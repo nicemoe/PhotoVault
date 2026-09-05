@@ -168,9 +168,10 @@ private final class ResumeGuard: @unchecked Sendable {
 
 private final class HTTPConnection {
 
-    /// 单次请求体上限。视频上传要走这条路，所以放到 4GB。
+    /// 单次请求体上限。视频直传走这条路，几十 GB 也可能，所以放得很宽——
+    /// 真正的约束是设备剩余空间，那个由写盘失败来兜底。
     /// 大的请求体不进内存——超过 spillThreshold 就边收边写盘。
-    private static let maxBodyBytes = 4 * 1024 * 1024 * 1024
+    private static let maxBodyBytes = 64 * 1024 * 1024 * 1024
 
     /// 超过这个大小的请求体落盘。小请求（JSON、几张图）还是走内存，省一次读写。
     private static let spillThreshold = 4 * 1024 * 1024

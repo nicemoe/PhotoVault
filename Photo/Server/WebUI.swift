@@ -740,9 +740,12 @@ async function upload(fileList, folderId){
   for(const batch of batches){
     const batchBytes = batch.reduce((sum, f) => sum + f.size, 0);
     try{
-      const res = await sendBatch(batch, target, loaded => {
+      const progress = loaded =>
         showUploadProgress(`上传中 ${saved} / ${media.length}`, (sentBytes + loaded) / totalBytes);
-      });
+      // 视频是一个文件一批，走直传；图片仍然打包成 multipart
+      const res = (batch.length === 1 && isVideoFile(batch[0]))
+        ? await sendFile(batch[0], target, progress)
+        : await sendBatch(batch, target, progress);
       if(res && res.ok){ saved += res.saved; skipped += res.skipped || 0; }
       else { failed += batch.length; }
     }catch(err){
@@ -761,6 +764,25 @@ async function upload(fileList, folderId){
   toast(`已上传 ${saved} 个${notes.length ? '，' + notes.join('、') : ''}`);
 
   refreshAfterUpload(target);
+}
+
+// 单个文件直传：请求体就是文件本身，不套 multipart。
+// 大视频套 multipart 的话手机端磁盘上会同时存在两份（收到的请求体、
+// 从里面拆出来的那一段），8GB 的片子要占 16GB。
+function sendFile(file, folderId, onProgress){
+  return new Promise((resolve, reject) => {
+    const name = file.relPath || file.webkitRelativePath || file.name;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-file?folder=' + folderId + '&name=' + encodeURIComponent(name));
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = e => { if(e.lengthComputable) onProgress(e.loaded); };
+    xhr.onload = () => {
+      try{ resolve(JSON.parse(xhr.responseText)); }
+      catch(err){ reject(err); }
+    };
+    xhr.onerror = () => reject(new Error('network'));
+    xhr.send(file);
+  });
 }
 
 function sendBatch(files, folderId, onProgress){

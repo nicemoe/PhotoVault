@@ -177,6 +177,50 @@ final class WiFiService {
             store.deleteAssets([id], from: folderID)
             return .ok()
 
+        // 单个文件直传：请求体本身就是文件，不套 multipart。
+        //
+        // 大视频走 multipart 的话，磁盘上会同时存在两份：落盘的请求体，
+        // 和从里面拆出来的那一段。8GB 的片子要占 16GB。直传的话收到的
+        // 那个文件就是成品，直接搬进媒体库，只占一份。
+        case ("POST", "/api/upload-file"):
+            guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
+                  store.folder(folderID) != nil else {
+                return .error("目标目录不存在", status: 404)
+            }
+            let rawName = request.query["name"] ?? ""
+            let target = resolveFolder(for: rawName, under: folderID)
+
+            // 小文件不会落盘，body 还在内存里，先写成临时文件再走同一条路
+            var source = request.bodyFile
+            var temporary: URL?
+            if source == nil, !request.body.isEmpty {
+                let temp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                if (try? request.body.write(to: temp, options: .atomic)) != nil {
+                    source = temp
+                    temporary = temp
+                }
+            }
+            defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
+
+            guard let source else { return .error("没有收到文件") }
+
+            let ok: Bool
+            if isVideoName(rawName) {
+                ok = await store.addVideo(from: source, to: target, name: rawName) != nil
+            } else if let data = try? Data(contentsOf: source, options: .mappedIfSafe) {
+                ok = await store.addImage(data: data, to: target, name: rawName) != nil
+            } else {
+                ok = false
+            }
+
+            if ok {
+                receivedCount += 1
+                note("收到「\((rawName as NSString).lastPathComponent)」")
+                store.saveNow()
+            }
+            return .ok(["saved": ok ? 1 : 0, "skipped": ok ? 0 : 1])
+
         case ("POST", "/api/upload"):
             guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
                   store.folder(folderID) != nil else {
@@ -222,10 +266,24 @@ final class WiFiService {
                     // 网页拖整个文件夹上来时，文件名里带着相对路径（照片/原图/a.jpg），
                     // 按它逐级建目录，把原来的层级原样搬过来，
                     // 而不是把里面的文件全抖到当前目录
-                    let target = resolveFolder(for: part.fileName ?? "", under: folderID)
-                    // 落盘在后台，主线程只在 attach 时短暂持有
-                    if await store.addImage(data: part.data, to: target,
-                                            name: part.fileName ?? "") != nil {
+                    let name = part.fileName ?? ""
+                    let target = resolveFolder(for: name, under: folderID)
+
+                    // 这条路也要认视频。小于落盘阈值的请求体走内存解析，
+                    // 之前这里一律当图片喂给 ImageProbe，于是几 MB 的短视频
+                    // 全被当成「格式不支持」跳掉，大视频反而正常。
+                    if isVideoName(name) {
+                        let temp = FileManager.default.temporaryDirectory
+                            .appendingPathComponent(UUID().uuidString + "-" + (name as NSString).lastPathComponent)
+                        if (try? part.data.write(to: temp, options: .atomic)) != nil,
+                           await store.addVideo(from: temp, to: target, name: name) != nil {
+                            saved += 1
+                        } else {
+                            skipped += 1
+                        }
+                        try? FileManager.default.removeItem(at: temp)
+                    } else if await store.addImage(data: part.data, to: target, name: name) != nil {
+                        // 落盘在后台，主线程只在 attach 时短暂持有
                         saved += 1
                     } else {
                         skipped += 1
