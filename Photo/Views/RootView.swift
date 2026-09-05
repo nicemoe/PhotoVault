@@ -222,8 +222,19 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             // 进入后台后 socket 会被系统回收，直接停掉避免显示"运行中"却连不上
             if phase == .background, wifi.isRunning { wifi.stop() }
+            // 电脑上把文件拖进「导入」文件夹后，回到 App 就收走。
+            // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
+            // 常驻监听目录只会白耗电。
+            if phase == .active { Task { await collectInbox() } }
         }
+        .task { await collectInbox() }
         .toast($toastItem)
+    }
+
+    private func collectInbox() async {
+        let saved = await store.importFromInbox()
+        guard saved > 0 else { return }
+        toastItem = Toast(icon: "tray.and.arrow.down.fill", text: "已收进 \(saved) 个文件")
     }
 
     // MARK: 加号菜单

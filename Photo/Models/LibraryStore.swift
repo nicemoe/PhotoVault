@@ -27,6 +27,37 @@ enum Paths {
 
     static let libraryFile = documents.appendingPathComponent("library.json")
 
+    /// 「导入」文件夹。Info.plist 开了文件共享，电脑用访达、手机用「文件」
+    /// 都能直接把照片视频拖进这里，App 回到前台就收走。
+    ///
+    /// 不直接扫 Documents 根目录：那里还躺着 library.json 和 Media/Posters，
+    /// 混在一起既容易误删，也分不清哪些是新拖进来的。
+    static let inbox: URL = {
+        let url = documents.appendingPathComponent("导入", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        // 放一份说明。用 .md 而不是常见图片视频后缀，免得自己被收进去。
+        let readme = url.appendingPathComponent("使用说明.md")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            let text = """
+            # 导入
+
+            把照片和视频放进这个文件夹，回到 App 就会自动收进媒体库，
+            原文件随后会被删掉（已经存进 App 里了）。
+
+            文件夹结构会照搬成分组和目录：
+
+                导入/2025 京都/大阪/IMG_0001.jpg   →  分组「2025 京都」→ 目录「大阪」
+                导入/2025 京都/IMG_0002.jpg        →  分组「2025 京都」→ 目录「未分类」
+                导入/IMG_0003.jpg                  →  分组「电脑导入」→ 目录「未分类」
+
+            同名的分组和目录会直接复用，不会重复建。
+            """
+            try? Data(text.utf8).write(to: readme, options: .atomic)
+        }
+        return url
+    }()
+
     static func url(for asset: Asset) -> URL {
         media.appendingPathComponent(asset.fileName)
     }

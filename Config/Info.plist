@@ -45,6 +45,14 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 
+	<!-- 文件共享：Documents 目录在电脑的访达和手机的「文件」里都能直接打开，
+	     照片视频可以从电脑拖进 Documents/导入/，App 回到前台自动收走。
+	     两个键要一起加：前者管访达，后者管「文件」App。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
 	<!-- 从系统相册导入照片和视频 -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>需要访问相册，才能把你选中的照片和视频导入到这个 App 的目录中。</string>

@@ -24,4 +24,20 @@ enum MediaFormats {
     static func isVideo(fileName: String) -> Bool {
         videoExtensions.contains((fileName as NSString).pathExtension.lowercased())
     }
+
+    /// 扫「导入」文件夹时用。
+    ///
+    /// 网页上传那条路不需要它：文件是用户一个个挑出来的，非图片交给
+    /// ImageProbe 判就行。扫文件夹不一样，里面难免混着 .DS_Store、
+    /// 说明文档、字幕文件，得先把明显不是媒体的挡在外面。
+    static let imageExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "heic", "heif", "gif", "webp",
+        "tif", "tiff", "bmp", "avif", "jfif",
+        // 常见 RAW，ImageIO 大多能解
+        "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2"
+    ]
+
+    static func isImage(fileName: String) -> Bool {
+        imageExtensions.contains((fileName as NSString).pathExtension.lowercased())
+    }
 }
