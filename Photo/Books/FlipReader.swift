@@ -68,7 +68,8 @@ final class FlipContainerView: UIView {
     private let fullFlipDuration: CFTimeInterval = 0.5
     /// 点击翻页单独慢一档：拖动是手指已经把纸带到半路，补完剩下那点得快；
     /// 点击是整页从头翻到尾，走 0.5 秒像被弹过去的，看不清纸怎么卷的。
-    private let tapFlipDuration: CFTimeInterval = 1.0
+    /// 也不能太慢——1.0 秒连着翻会觉得在等它。
+    private let tapFlipDuration: CFTimeInterval = 0.7
     /// 动画结束后要落到的位置
     private var pendingLocator: PageLocator?
 
@@ -244,7 +245,9 @@ final class FlipContainerView: UIView {
     }
 
     private func startFlip(forward goForward: Bool, animated: Bool) {
-        guard !isAnimating else { return }
+        // 上一页还在翻就又点了：先把它落位，再翻下一页。
+        // 这里直接 return 的话，连点会有一半点击被吞掉，表现就是「点了不翻」。
+        if isAnimating { finishAnimation() }
         // 点击翻页固定用右下角起翻，和真书一致
         let corner = CGPoint(x: bounds.width, y: bounds.height)
         guard prepare(forward: goForward, touchAt: corner) else { return }
@@ -314,6 +317,12 @@ final class FlipContainerView: UIView {
         flipView.update(touch: point)
 
         guard t >= 1 else { return }
+        finishAnimation()
+    }
+
+    /// 收尾：停掉 displayLink、落到目标页、重画。
+    /// 动画自己走完会调，连点时也会被提前调一次。
+    private func finishAnimation() {
         displayLink?.invalidate()
         displayLink = nil
 
