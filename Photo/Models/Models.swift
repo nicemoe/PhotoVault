@@ -117,7 +117,10 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
 
     /// 含所有层级
     var folderCount: Int { folders.count }
+    /// 图片 + 视频的总数
     var photoCount: Int { folders.reduce(0) { $0 + $1.assets.count } }
+    var imageCount: Int { folders.reduce(0) { $0 + $1.assets.lazy.filter { !$0.isVideo }.count } }
+    var videoCount: Int { folders.reduce(0) { $0 + $1.assets.lazy.filter(\.isVideo).count } }
 
     /// 跨目录取最近的 4 张做封面拼贴
     var coverAssets: [Asset] {

@@ -325,20 +325,27 @@ struct SortMenu: View {
 struct StatBar: View {
     let items: [(String, String)]
 
+    /// 四格时每格只剩八十几点宽，数字大一点就要换行，所以按格数收一收
+    private var numberSize: CGFloat { items.count > 3 ? 18 : 20 }
+    private var padding: CGFloat { items.count > 3 ? 11 : 14 }
+
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: items.count > 3 ? 8 : 10) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.0)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(.system(size: numberSize, weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.label)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Text(item.1)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.secondaryLabel)
+                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 12)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, padding)
                 .flatCard(radius: 16)
             }
         }

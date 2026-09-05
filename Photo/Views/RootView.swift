@@ -43,7 +43,8 @@ struct RootView: View {
                     StatBar(items: [
                         ("\(store.groups.count)", "分组"),
                         ("\(store.groups.reduce(0) { $0 + $1.folderCount })", "目录"),
-                        ("\(store.totalPhotoCount)", "照片")
+                        ("\(store.totalImageCount)", "照片"),
+                        ("\(store.totalVideoCount)", "视频")
                     ])
                     .padding(.top, 4)
 

@@ -108,6 +108,8 @@ final class LibraryStore {
     }
 
     var totalPhotoCount: Int { library.groups.reduce(0) { $0 + $1.photoCount } }
+    var totalImageCount: Int { library.groups.reduce(0) { $0 + $1.imageCount } }
+    var totalVideoCount: Int { library.groups.reduce(0) { $0 + $1.videoCount } }
 
     func group(_ id: UUID) -> PhotoGroup? {
         library.groups.first { $0.id == id }

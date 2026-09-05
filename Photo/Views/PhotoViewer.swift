@@ -23,7 +23,10 @@ struct PhotoViewer: View {
         self.assets = assets
         self.startIndex = startIndex
         self.folderID = folderID
-        _currentID = State(initialValue: assets.indices.contains(startIndex) ? assets[startIndex].id : assets.first?.id)
+        let first = assets.indices.contains(startIndex) ? assets[startIndex] : assets.first
+        _currentID = State(initialValue: first?.id)
+        // 视频进来就先把工具栏收起来，别挡着画面；点一下屏幕再出来
+        _showChrome = State(initialValue: !(first?.isVideo ?? false))
     }
 
     /// 过滤掉已经被删掉的。每次访问都要建一次 Set，所以在 body 里只算一次往下传。
@@ -50,7 +53,8 @@ struct PhotoViewer: View {
                             // 每页都挂一个 AVPlayer 的话会同时开好几路解码
                             VideoPage(asset: asset,
                                       isCurrent: asset.id == currentID,
-                                      onTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } })
+                                      chromeVisible: showChrome,
+                                      onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } })
                         } else {
                             ZoomableImage(asset: asset) {
                                 withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
@@ -106,6 +110,13 @@ struct PhotoViewer: View {
         .onChange(of: live.count, initial: true) { _, count in
             if count == 0 { dismiss() }
         }
+        // 翻到视频就自动收起工具栏：视频是要看画面的，翻回图片再放出来
+        .onChange(of: currentID) { _, id in
+            guard let asset = liveAssets.first(where: { $0.id == id }) else { return }
+            if asset.isVideo, showChrome {
+                withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
+            }
+        }
     }
 
     // MARK: 顶栏
@@ -115,11 +126,11 @@ struct PhotoViewer: View {
             Button {
                 dismiss()
             } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Theme.viewerLabel)
-                    .frame(width: 36, height: 36)
-                    .background(Theme.viewerControl.opacity(0.1), in: Circle())
+                topCircle {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.viewerLabel)
+                }
             }
 
             Spacer()
@@ -130,7 +141,10 @@ struct PhotoViewer: View {
                     .foregroundStyle(Theme.viewerLabel)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 7)
-                    .background(Theme.viewerControl.opacity(0.1), in: Capsule())
+                    .background {
+                        Capsule().fill(.ultraThinMaterial)
+                            .overlay(Capsule().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
+                    }
             }
 
             Spacer()
@@ -138,13 +152,11 @@ struct PhotoViewer: View {
             Button {
                 isPlaying.toggle()
             } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(isPlaying ? Color.white : Theme.viewerLabel)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(isPlaying ? Theme.accent : Theme.viewerControl.opacity(0.1))
-                    )
+                topCircle(highlighted: isPlaying) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(isPlaying ? Color.white : Theme.viewerLabel)
+                }
             }
             .disabled(total < 2)
             .opacity(total < 2 ? 0.35 : 1)
@@ -202,12 +214,31 @@ struct PhotoViewer: View {
         .background(.ultraThinMaterial)
     }
 
+    /// 底栏的图标。底栏本身有毛玻璃背景，所以图标只要够粗就行。
     private func viewerIcon(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 17, weight: .medium))
+            .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(Theme.viewerLabel)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())   // 让整个方框可点，而不是只有图标的不透明像素
+    }
+
+    /// 顶栏的圆形按钮。它悬在画面上，背后可能是任意颜色的照片或视频，
+    /// 所以底色不能只有 10% ——那在浅色画面上几乎看不见。用毛玻璃加描边，
+    /// 深浅画面上都能分出边界。
+    private func topCircle<Content: View>(highlighted: Bool = false,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(width: 38, height: 38)
+            .background {
+                if highlighted {
+                    Circle().fill(Theme.accent)
+                } else {
+                    Circle().fill(.ultraThinMaterial)
+                        .overlay(Circle().strokeBorder(Theme.viewerControl.opacity(0.16), lineWidth: 0.8))
+                }
+            }
+            .contentShape(Circle())
     }
 
     private func byteText(_ bytes: Int) -> String {
