@@ -7,7 +7,7 @@ struct BookshelfView: View {
     @Environment(WiFiService.self) private var wifi
 
     @State private var showImporter = false
-    @State private var openedBook: UUID?
+    @State private var openedBook: OpenedBook?
     @State private var renaming: Book?
     @State private var renameText = ""
     @State private var deleting: Book?
@@ -56,7 +56,7 @@ struct BookshelfView: View {
                         LazyVGrid(columns: layout.columns, spacing: 22) {
                             ForEach(visibleBooks) { book in
                                 Button {
-                                    openedBook = book.id
+                                    openedBook = OpenedBook(id: book.id)
                                 } label: {
                                     BookCard(book: book, side: layout.side)
                                 }
@@ -68,7 +68,7 @@ struct BookshelfView: View {
                         LazyVStack(spacing: 10) {
                             ForEach(visibleBooks) { book in
                                 Button {
-                                    openedBook = book.id
+                                    openedBook = OpenedBook(id: book.id)
                                 } label: {
                                     BookRow(book: book)
                                 }
@@ -110,9 +110,15 @@ struct BookshelfView: View {
                     }
                 }
             }
-            .navigationDestination(item: $openedBook) { id in
-                ReaderView(bookID: id)
-            }
+        }
+        // 阅读器用全屏覆盖，不走导航 push。
+        //
+        // push 的话要靠 .toolbar(.hidden, for: .tabBar) 藏标签栏，
+        // 而 SwiftUI 要等退场动画整个走完才把它放回来——退出小说后
+        // 底部会空一下才冒出来。盖上去就没这问题，标签栏根本没被藏过。
+        // 顺带也不会和「从左边往右滑翻上一页」抢边缘返回手势。
+        .fullScreenCover(item: $openedBook) { opened in
+            ReaderView(bookID: opened.id)
         }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.allowedTypes,
@@ -353,4 +359,9 @@ struct ImportingOverlay: View {
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
     }
+}
+
+/// fullScreenCover(item:) 要 Identifiable，UUID 本身不是
+private struct OpenedBook: Identifiable {
+    let id: UUID
 }

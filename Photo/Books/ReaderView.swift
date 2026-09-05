@@ -63,7 +63,6 @@ struct ReaderView: View {
             }
         }
         .statusBarHidden(!showChrome)
-        .toolbar(.hidden, for: .tabBar)
         .navigationBarHidden(true)
         .task(id: bookID) { restoreProgress() }
         .onChange(of: locator) { _, _ in saveProgress() }
