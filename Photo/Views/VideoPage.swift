@@ -601,6 +601,7 @@ struct VideoPage: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         guard duration > 0 else { return }
+                        if !scrubbing { player?.pause() }   // 同上，拖之前先停
                         scrubbing = true
                         current = min(max(0, value.location.x / width), 1) * duration
                         seek(to: current, precise: false)   // 拖的过程要快，容差交给系统
@@ -823,6 +824,10 @@ struct VideoPage: View {
                     if horizontal {
                         dragMode = .seek
                         dragAnchor = current
+                        scrubbing = true
+                        // 拖的时候必须先暂停。不停的话每次 seek 完播放器立刻
+                        // 按原速继续往前跑，画面被一次次拽走，看着就是不跟手。
+                        player?.pause()
                     } else {
                         dragMode = value.startLocation.x < size.width / 2 ? .brightness : .volume
                         dragAnchor = dragMode == .brightness
@@ -841,9 +846,7 @@ struct VideoPage: View {
                     let span = min(duration, max(60, duration / 2))
                     let delta = Double(value.translation.width / size.width) * span
                     current = min(max(0, dragAnchor + delta), duration)
-                    // 拖的过程中画面就跟着走，不用等松手才知道拖到了哪。
-                    // 带容差，每帧做精确 seek 会卡。
-                    scrubbing = true
+                    // 带容差，跳到最近的关键帧就行，要的是跟手
                     seek(to: current, precise: false)
                     show(hint: "\(timeText(current)) / \(timeText(duration))")
                 case .brightness:
@@ -864,6 +867,10 @@ struct VideoPage: View {
                 if dragMode == .seek {
                     seek(to: current, precise: true)   // 松手落到准确位置
                     scrubbing = false
+                    if isPlaying {
+                        player?.play()
+                        player?.rate = rate
+                    }
                 }
                 dragMode = nil
                 steadyOffset = offset
