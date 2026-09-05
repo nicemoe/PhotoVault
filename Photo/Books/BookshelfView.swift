@@ -12,6 +12,7 @@ struct BookshelfView: View {
 
     @Environment(BookLibrary.self) private var library
     @Environment(WiFiService.self) private var wifi
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var sheet: ShelfSheet?
     @State private var openedBook: OpenedBook?
@@ -172,6 +173,20 @@ struct BookshelfView: View {
             }
         }
         .toast($toastItem)
+        // 电脑上把书拖进「导入」文件夹后，回到 App 就收走。
+        // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
+        // 常驻监听目录只会白耗电。
+        .task { await collectInbox() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await collectInbox() }
+        }
+    }
+
+    private func collectInbox() async {
+        let saved = await library.importFromInbox()
+        guard saved > 0 else { return }
+        toastItem = Toast(icon: "tray.and.arrow.down.fill", text: "已收进 \(saved) 本")
     }
 
     private var addMenu: some View {

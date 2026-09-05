@@ -205,6 +205,47 @@ final class BookLibrary {
         return try await importBook(from: temp)
     }
 
+    /// 收走「导入」文件夹里的书。App 一进前台就跑一次。
+    ///
+    /// 导进来之后删掉原文件：内容已经拆成章存到 App 自己的目录里了，
+    /// 留着只会让人以为还没导，下次进前台又导一遍。
+    /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
+    @discardableResult
+    func importFromInbox() async -> Int {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: Paths.inbox,
+                                         includingPropertiesForKeys: [.isRegularFileKey],
+                                         options: [.skipsHiddenFiles]) else { return 0 }
+
+        var files: [URL] = []
+        for case let url as URL in walker {
+            guard Self.importableExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            files.append(url)
+        }
+        guard !files.isEmpty else { return 0 }
+
+        var saved = 0
+        for url in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard (try? await importBook(from: url)) != nil else { continue }
+            try? fm.removeItem(at: url)
+            saved += 1
+        }
+
+        // 收完之后把空掉的子文件夹一并清掉，文件夹里就只剩说明文件
+        if let subdirs = try? fm.contentsOfDirectory(at: Paths.inbox,
+                                                     includingPropertiesForKeys: [.isDirectoryKey],
+                                                     options: [.skipsHiddenFiles]) {
+            for dir in subdirs where (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                if let left = try? fm.contentsOfDirectory(atPath: dir.path), left.isEmpty {
+                    try? fm.removeItem(at: dir)
+                }
+            }
+        }
+        return saved
+    }
+
+    private static let importableExtensions: Set<String> = ["txt", "epub"]
+
     // MARK: 全文搜索
 
     struct SearchHit: Identifiable, Hashable {

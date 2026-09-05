@@ -44,6 +44,14 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 
+	<!-- 文件共享：Documents 目录在电脑的访达和手机的「文件」里都能直接打开，
+	     书可以从电脑拖进 Documents/导入/，App 回到前台自动收走。
+	     两个键要一起加：前者管访达，后者管「文件」App。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
 	<!-- WiFi 上传：在局域网内开一个 HTTP 服务 -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>开启 WiFi 上传后，需要在局域网内提供网页服务，让同一 WiFi 下的设备可以上传小说。</string>
