@@ -391,7 +391,9 @@ struct VideoPage: View {
                 }
 
                 HStack(spacing: 4) {
-                    if landscape { lockButton } else { speedMenu }
+                    // 倍速只在顶栏出现。之前顶栏只在横屏显示，竖屏才在这儿
+                    // 补一个；现在顶栏两种方向都有了，这里再放就是重复。
+                    lockButton
 
                     // 只在裁得不多的时候给「铺满」这个选项。
                     // 竖拍视频在横屏下要裁掉 74% 才能铺满，那不叫铺满，
