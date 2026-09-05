@@ -59,7 +59,7 @@ struct Doc {
     std::string md5raw;         // 原始字节
     std::string md5norm;        // 归一化正文
     std::string md5head;        // 归一化正文的前 HEAD_CHARS 个字
-    unsigned long long simhash = 0;
+    std::vector<unsigned long long> sketch;   // 正文的 MinHash 指纹
     size_t chars = 0;           // 归一化后的字数
 
     std::wstring title;         // 文件名去掉修饰后的书名
@@ -257,35 +257,63 @@ static unsigned long long Fnv1a(const wchar_t* p, size_t n) {
     return h;
 }
 
-/// 对中文用字符二元组当特征——不需要词典，也不会因为词典缺词漏判。
-/// 每个二元组算一个 64 位散列，按位投票，最后取符号位组成指纹。
-/// 两个文件指纹的汉明距离越小，正文越像。
-static unsigned long long SimHash(const std::wstring& text) {
-    if (text.size() < 2) return 0;
-    int vote[64] = {};
+// ── MinHash：正文相似度 ──────────────────────────────────────────────
 
-    // 长文本抽样：几百万字全跑一遍没必要，隔几个字取一个二元组，
-    // 统计意义上一样能反映内容
-    size_t step = text.size() > 400000 ? text.size() / 400000 + 1 : 1;
-    for (size_t i = 0; i + 1 < text.size(); i += step) {
-        unsigned long long h = Fnv1a(&text[i], 2);
-        for (int b = 0; b < 64; ++b) {
-            vote[b] += (h >> b) & 1 ? 1 : -1;
+static const size_t SHINGLE = 4;      // 片段取几个字
+static const size_t SKETCH = 128;     // 指纹留几个值
+
+/// 为什么是四个字，不是两个字。
+///
+/// 一开始用的是字符二元组 + SimHash，测出来两本完全不同的小说指纹只差 1 位。
+/// 道理很简单：中文散文的字频高度集中，常用字来回就那些，两本不相干的书
+/// 在「二元组分布」这个维度上本来就长得几乎一样，SimHash 量的正是这个分布。
+/// 四字片段就区分得开了——不相干的两本书几乎不会有相同的四字串，
+/// 而同一本书的两份拷贝会共享绝大多数四字串。
+///
+/// 取法是 bottom-k MinHash：所有片段的散列里留最小的 SKETCH 个。
+/// 两份指纹的交集比例就是 Jaccard 相似度的估计值，直接是个百分比，
+/// 比「汉明距离 3 位以内」这种说法好判断得多。
+static std::vector<unsigned long long> Sketch(const std::wstring& text) {
+    std::vector<unsigned long long> heap;   // 大顶堆，堆顶是当前留下的最大值
+    std::unordered_set<unsigned long long> inHeap;
+    if (text.size() < SHINGLE) return heap;
+
+    heap.reserve(SKETCH + 1);
+    for (size_t i = 0; i + SHINGLE <= text.size(); ++i) {
+        unsigned long long h = Fnv1a(&text[i], SHINGLE);
+        if (inHeap.count(h)) continue;      // 同一个片段出现多次只算一次
+        if (heap.size() < SKETCH) {
+            heap.push_back(h);
+            inHeap.insert(h);
+            std::push_heap(heap.begin(), heap.end());
+            continue;
         }
+        if (h >= heap.front()) continue;
+        inHeap.erase(heap.front());
+        std::pop_heap(heap.begin(), heap.end());
+        heap.back() = h;
+        inHeap.insert(h);
+        std::push_heap(heap.begin(), heap.end());
     }
-
-    unsigned long long sig = 0;
-    for (int b = 0; b < 64; ++b) {
-        if (vote[b] > 0) sig |= (1ull << b);
-    }
-    return sig;
+    std::sort(heap.begin(), heap.end());
+    return heap;
 }
 
-static int Hamming(unsigned long long a, unsigned long long b) {
-    unsigned long long x = a ^ b;
-    int n = 0;
-    while (x) { x &= x - 1; ++n; }
-    return n;
+/// bottom-k MinHash 的相似度估计：把两边的指纹并起来取最小的 k 个，
+/// 数一数其中有多少个是两边都有的。
+static double SketchSimilarity(const std::vector<unsigned long long>& a,
+                               const std::vector<unsigned long long>& b) {
+    if (a.empty() || b.empty()) return 0;
+    size_t k = min(min(a.size(), b.size()), SKETCH);
+
+    size_t i = 0, j = 0, taken = 0, both = 0;
+    while (taken < k && (i < a.size() || j < b.size())) {
+        if (j >= b.size() || (i < a.size() && a[i] < b[j])) { ++i; }
+        else if (i >= a.size() || b[j] < a[i]) { ++j; }
+        else { ++both; ++i; ++j; }          // 两边都有这个值
+        ++taken;
+    }
+    return taken ? (double)both / (double)taken : 0;
 }
 
 // ── 文件名归一化：这就是「分词」那一步 ───────────────────────────────
@@ -459,7 +487,7 @@ static void Fingerprint(Doc* doc) {
         doc->md5head = MD5Hex(head.data(), head.size());
     }
 
-    doc->simhash = SimHash(text);
+    doc->sketch = Sketch(text);
     doc->ok = true;
 }
 
@@ -467,17 +495,13 @@ static void Fingerprint(Doc* doc) {
 ///
 /// 三种「完全相等」的判据（原始 MD5、归一化 MD5、开头 MD5）不走这里——
 /// 那些用哈希表分桶是 O(n)，塞进两两比较白白多花 n² 次字符串比较。
-static std::wstring CompareFuzzy(const Doc& a, const Doc& b, int maxHamming) {
-    if (a.simhash && b.simhash) {
-        int d = Hamming(a.simhash, b.simhash);
-        if (d <= maxHamming) {
-            // 长度差太多就不是「相似」，是两本不同的书恰好用词接近
-            double ratio = (double)min(a.chars, b.chars) / (double)max(a.chars, b.chars);
-            if (ratio > 0.5) {
-                wchar_t buf[96];
-                swprintf_s(buf, L"正文高度相似（差 %d 位）", d);
-                return buf;
-            }
+static std::wstring CompareFuzzy(const Doc& a, const Doc& b, int minPercent) {
+    if (!a.sketch.empty() && !b.sketch.empty()) {
+        double sim = SketchSimilarity(a.sketch, b.sketch);
+        if (sim * 100 >= minPercent) {
+            wchar_t buf[96];
+            swprintf_s(buf, L"正文相似 %.0f%%", sim * 100);
+            return buf;
         }
     }
 
@@ -495,11 +519,20 @@ static std::wstring CompareFuzzy(const Doc& a, const Doc& b, int maxHamming) {
 /// 一组里留哪一份：先要正文最全的，一样全就要文件名最干净的。
 /// 「干净」= 原名和归一化书名的长度差最小，也就是修饰最少。
 static bool BetterKeeper(const Doc& candidate, const Doc& current) {
-    if (candidate.chars != current.chars) return candidate.chars > current.chars;
-    if (candidate.bytes != current.bytes) return candidate.bytes > current.bytes;
-    size_t noiseA = candidate.name.size() - min(candidate.name.size(), candidate.title.size());
-    size_t noiseB = current.name.size() - min(current.name.size(), current.title.size());
-    if (noiseA != noiseB) return noiseA < noiseB;
+    // 字数差得多，就要字多的那份——少的那份多半没下完
+    double ratio = current.chars ? (double)candidate.chars / (double)current.chars : 2.0;
+    if (ratio < 0.98) return false;
+    if (ratio > 1.02) return true;
+
+    // 字数差不到 2%，就要名字干净的。
+    // 不能再看字数：夹了广告页的那份反而更长，
+    // 而多出来的广告往往也会在文件名里留下痕迹。
+    if (candidate.title.size() != current.title.size()) {
+        return candidate.title.size() < current.title.size();
+    }
+    if (candidate.name.size() != current.name.size()) {
+        return candidate.name.size() < current.name.size();
+    }
     return candidate.name < current.name;
 }
 
@@ -535,12 +568,12 @@ static DWORD WINAPI ScanThread(LPVOID) {
         }
     }
 
-    int maxHamming = 3;
+    int minPercent = 80;
     {
         wchar_t buf[16] = L"";
         GetWindowTextW(g_simEdit, buf, 16);
         int v = _wtoi(buf);
-        if (v >= 0 && v <= 16) maxHamming = v;
+        if (v >= 50 && v <= 100) minPercent = v;
     }
 
     DisjointSet ds;
@@ -570,6 +603,9 @@ static DWORD WINAPI ScanThread(LPVOID) {
             int first = hit->second;
             if (ds.find(first) == ds.find((int)i)) continue;
             ds.merge(first, (int)i);
+            // 两边都记上依据。只记后来的那个的话，先出现的那份要是没被选中
+            // 保留，列表里「判定依据」就是一片空白，看着像没判出来
+            if (reason[first].empty()) reason[first] = bucket.why;
             if (reason[i].empty()) {
                 // 开头一样但长度差一截，多半是一份没下完，说清楚差多少
                 if (bucket.field == &Doc::md5head && docs[i].chars != docs[first].chars) {
@@ -592,10 +628,11 @@ static DWORD WINAPI ScanThread(LPVOID) {
         for (size_t j = i + 1; j < docs.size(); ++j) {
             if (!docs[j].ok) continue;
             if (ds.find((int)i) == ds.find((int)j)) continue;
-            std::wstring why = CompareFuzzy(docs[i], docs[j], maxHamming);
+            std::wstring why = CompareFuzzy(docs[i], docs[j], minPercent);
             if (why.empty()) continue;
             ds.merge((int)i, (int)j);
             if (reason[j].empty()) reason[j] = why;
+            if (reason[i].empty()) reason[i] = why;
         }
     }
 
@@ -932,12 +969,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_btnMove = button(L"移到 _重复", ID_MOVE);
         g_btnRecycle = button(L"删到回收站", ID_RECYCLE);
 
-        HWND label = CreateWindowExW(0, L"STATIC", L"正文相似度容差（0-16）：",
+        HWND label = CreateWindowExW(0, L"STATIC", L"正文相似度阀值 %：",
             WS_CHILD | WS_VISIBLE | SS_RIGHT, 0, 0, 0, 0, hwnd,
             (HMENU)ID_SIM_LABEL, nullptr, nullptr);
         SendMessageW(label, WM_SETFONT, (WPARAM)g_font, TRUE);
 
-        g_simEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"3",
+        g_simEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"80",
             WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_CENTER, 0, 0, 0, 0, hwnd,
             (HMENU)ID_SIM_EDIT, nullptr, nullptr);
         SendMessageW(g_simEdit, WM_SETFONT, (WPARAM)g_font, TRUE);
