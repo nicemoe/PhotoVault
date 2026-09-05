@@ -66,6 +66,9 @@ final class FlipContainerView: UIView {
     /// 走完整段（页角 → 完全翻走）用的时间。实际时长按距离折算，
     /// 从半路松手时就不该还花满这么久。
     private let fullFlipDuration: CFTimeInterval = 0.5
+    /// 点击翻页单独慢一档：拖动是手指已经把纸带到半路，补完剩下那点得快；
+    /// 点击是整页从头翻到尾，走 0.5 秒像被弹过去的，看不清纸怎么卷的。
+    private let tapFlipDuration: CFTimeInterval = 1.0
     /// 动画结束后要落到的位置
     private var pendingLocator: PageLocator?
 
@@ -247,9 +250,9 @@ final class FlipContainerView: UIView {
         guard prepare(forward: goForward, touchAt: corner) else { return }
 
         if goForward {
-            animate(from: flipView.corner, to: foldedAwayPoint(), commit: true)
+            animate(from: flipView.corner, to: foldedAwayPoint(), commit: true, base: tapFlipDuration)
         } else {
-            animate(from: foldedAwayPoint(), to: flipView.corner, commit: true)
+            animate(from: foldedAwayPoint(), to: flipView.corner, commit: true, base: tapFlipDuration)
         }
     }
 
@@ -278,7 +281,8 @@ final class FlipContainerView: UIView {
         }
     }
 
-    private func animate(from: CGPoint, to: CGPoint, commit: Bool) {
+    /// base 是走完整段要花的时间；不传就用拖动那档。
+    private func animate(from: CGPoint, to: CGPoint, commit: Bool, base: CFTimeInterval? = nil) {
         animationFrom = from
         animationTo = to
         animationStart = CACurrentMediaTime()
@@ -289,7 +293,7 @@ final class FlipContainerView: UIView {
         let distance = hypot(to.x - from.x, to.y - from.y)
         let full = hypot(bounds.width, bounds.height) * 2.05
         let ratio = full > 0 ? min(1, distance / full) : 1
-        animationDuration = max(0.18, fullFlipDuration * ratio)
+        animationDuration = max(0.18, (base ?? fullFlipDuration) * ratio)
 
         displayLink?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(step))

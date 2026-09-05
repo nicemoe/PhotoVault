@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// 书相关的磁盘布局。和相册的 library.json 完全独立，互不影响。
+/// 书相关的磁盘布局。索引一个 json，正文按章拆成一堆小文件。
 enum BookPaths {
     static let root: URL = {
         let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
