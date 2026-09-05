@@ -16,3 +16,4 @@ DerivedData/
 .swiftpm/
 Packages/
 Pods/
+Tools/VideoConvert/build/
