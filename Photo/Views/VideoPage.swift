@@ -101,6 +101,8 @@ struct VideoPage: View {
     /// 工具栏是否可见。播放控件跟它同步，不再单独一套显隐规则。
     let chromeVisible: Bool
     var onSingleTap: () -> Void
+    /// 横屏时预览页的顶栏是收起的，关闭键得由这里出
+    var onClose: () -> Void
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -122,6 +124,8 @@ struct VideoPage: View {
     @State private var dragAnchor: Double = 0
     @State private var hint: String?
     @State private var hintToken = 0
+    /// 锁住后不响应任何手势，横躺着看不会被误触打断
+    @State private var locked = false
 
     /// 进来前的系统亮度，退出时还回去
     @State private var systemBrightness: CGFloat?
@@ -178,16 +182,21 @@ struct VideoPage: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Rectangle())
-            .gesture(magnifyGesture)
+            .gesture(magnifyGesture, including: locked ? .subviews : .all)
             // 只在本页独占横向手势时才挂拖动，竖屏没放大时完全不接管，
             // 免得和相册翻页抢
             .gesture(dragGesture(size: geo.size, landscape: landscape),
-                     including: (scale > 1.01 || landscape) ? .all : .subviews)
+                     including: locked ? .subviews : ((scale > 1.01 || landscape) ? .all : .subviews))
             // 双击必须写在单击前面，否则单击会先把手势吃掉
             .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                guard !locked else { return }
                 handleDoubleTap(at: location, width: geo.size.width)
             }
-            .onTapGesture { onSingleTap() }
+            .onTapGesture {
+                // 锁住时单击只负责把解锁键叫出来，不去开合整套工具栏
+                guard !locked else { return }
+                onSingleTap()
+            }
         }
         // 必须在这一层再声明一次全屏铺满。
         //
@@ -223,63 +232,154 @@ struct VideoPage: View {
         .foregroundStyle(.white.opacity(0.75))
     }
 
+    /// 控件贴着四边摆，中间留给画面。
+    /// 竖屏时上面那条交给预览页的工具栏，这里只出下半部分。
+    @ViewBuilder
     private func controls(landscape: Bool) -> some View {
-        VStack {
-            Spacer()
+        if locked {
+            // 锁住后只剩一个解锁键，其余手势和控件全部让开，
+            // 横躺着看的时候不会被误触打断
+            VStack {
+                Spacer()
+                HStack {
+                    lockButton
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(.leading, 20)
+        } else {
+            VStack(spacing: 0) {
+                if landscape { topRow }
+                Spacer(minLength: 0)
+                bottomRows(landscape: landscape)
+            }
+        }
+    }
 
-            Button {
-                toggle()
-            } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 64, height: 64)
-                    .background(.black.opacity(0.4), in: Circle())
+    /// 横屏顶栏：关闭 + 画质信息 + 倍速
+    private var topRow: some View {
+        HStack(spacing: 14) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 38, height: 38)
             }
 
+            Text(qualityText)
+                .font(.system(size: 12.5, weight: .semibold))
+                .opacity(0.75)
+
             Spacer()
 
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Text(timeText(current))
-                    progressBar
-                    Text(timeText(duration))
+            speedMenu
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .background(
+            LinearGradient(colors: [.black.opacity(0.55), .clear],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+        )
+    }
+
+    private func bottomRows(landscape: Bool) -> some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                Text(timeText(current))
+                progressBar
+                Text(timeText(duration))
+            }
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+
+            ZStack {
+                // 传输键固定在正中，两侧的按钮多一个少一个都不会把它挤歪
+                HStack(spacing: 30) {
+                    transportButton("gobackward.10") { skip(-10) }
+                    transportButton(isPlaying ? "pause.fill" : "play.fill", size: 30) { toggle() }
+                    transportButton("goforward.10") { skip(10) }
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .monospacedDigit()
 
-                HStack(spacing: 18) {
-                    Menu {
-                        ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { value in
-                            Button {
-                                setRate(Float(value))
-                            } label: {
-                                Label(value == 1 ? "正常" : "\(trimZero(value))×",
-                                      systemImage: rate == Float(value) ? "checkmark" : "")
-                            }
-                        }
-                    } label: {
-                        controlChip(rate == 1 ? "倍速" : "\(trimZero(Double(rate)))×",
-                                    icon: "speedometer")
-                    }
-
+                HStack {
+                    if landscape { lockButton } else { speedMenu }
                     Spacer()
-
                     Button {
                         setLandscape(!landscape)
                     } label: {
-                        controlChip(landscape ? "竖屏" : "横屏",
-                                    icon: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                        Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 38, height: 38)
                     }
                 }
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.bottom, landscape ? 24 : 118)   // 竖屏要让开底栏
         }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.bottom, landscape ? 8 : 96)   // 竖屏要让开预览页的底栏
+        .background(
+            LinearGradient(colors: [.clear, .black.opacity(0.55)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+        )
+    }
+
+    private func transportButton(_ icon: String, size: CGFloat = 22,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 54, height: 48)
+                .contentShape(Rectangle())
+        }
+    }
+
+    private var lockButton: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { locked.toggle() }
+        } label: {
+            Image(systemName: locked ? "lock.fill" : "lock.open")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(locked ? AnyShapeStyle(.black.opacity(0.5)) : AnyShapeStyle(.clear),
+                            in: Circle())
+        }
+    }
+
+    private var speedMenu: some View {
+        Menu {
+            ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { value in
+                Button {
+                    setRate(Float(value))
+                } label: {
+                    Label(value == 1 ? "正常" : "\(trimZero(value))×",
+                          systemImage: rate == Float(value) ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Text(rate == 1 ? "倍速" : "\(trimZero(Double(rate)))×")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(height: 38)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    /// 画质一行：1080P · 8.2 Mbps。码率是文件大小除以时长算的，够用了。
+    private var qualityText: String {
+        var parts: [String] = []
+        let shortSide = min(asset.width, asset.height)
+        if shortSide > 0 {
+            parts.append(shortSide >= 2160 ? "4K" : "\(shortSide)P")
+        }
+        if asset.duration > 0, asset.byteCount > 0 {
+            let mbps = Double(asset.byteCount) * 8 / asset.duration / 1_000_000
+            parts.append(String(format: "%.1f Mbps", mbps))
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// 进度条：点哪儿跳哪儿，也能按住横拖。

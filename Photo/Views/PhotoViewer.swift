@@ -68,7 +68,8 @@ struct PhotoViewer: View {
                             VideoPage(asset: asset,
                                       isCurrent: asset.id == currentID,
                                       chromeVisible: showChrome,
-                                      onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } })
+                                      onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } },
+                                      onClose: { dismiss() })
                         } else {
                             ZoomableImage(asset: asset) {
                                 withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
