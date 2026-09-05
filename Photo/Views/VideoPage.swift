@@ -1,13 +1,22 @@
 import SwiftUI
 import AVFoundation
 
-/// 强制屏幕方向。
-/// Info.plist 里已经允许竖屏和两个横屏方向，所以这里只是请求切换。
+/// 切换屏幕方向。
+///
+/// 只有视频播放页会用到横屏，别的页面一律竖屏——它们的网格列宽是量出来的
+/// 固定值，横屏量到的宽度残留下来就会把卡片挤出屏幕。所以这里除了请求几何
+/// 更新，还要同步改 AppDelegate 里的允许范围，并让当前控制器重新问一次。
 enum ScreenOrientation {
     @MainActor
     static func request(landscape: Bool) {
+        AppDelegate.allowedOrientations = landscape ? .landscape : .portrait
+
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).first else { return }
+
+        // 先让系统重新读一遍 supportedInterfaceOrientations，
+        // 否则 requestGeometryUpdate 会因为「不在允许范围内」被直接驳回
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait))
     }
 }
@@ -42,6 +51,9 @@ final class PlayerHostView: UIView {
         super.init(frame: frame)
         playerLayer.videoGravity = .resizeAspect
         backgroundColor = .clear
+        // 画面本身不需要接触摸。开着的话它会先把触摸吃掉，
+        // 外层 SwiftUI 的单击/双击就不一定收得到。
+        isUserInteractionEnabled = false
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -103,6 +115,9 @@ struct VideoPage: View {
     var onSingleTap: () -> Void
     /// 横屏时预览页的顶栏是收起的，关闭键得由这里出
     var onClose: () -> Void
+    /// 上一个/下一个媒体。到头了传 nil，按钮变灰。
+    var onPrevious: (() -> Void)?
+    var onNext: (() -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -247,7 +262,7 @@ struct VideoPage: View {
                 }
                 Spacer()
             }
-            .padding(.leading, 20)
+            .padding(.leading, 20 + safeInsets.left)
         } else {
             VStack(spacing: 0) {
                 if landscape { topRow }
@@ -275,13 +290,23 @@ struct VideoPage: View {
             speedMenu
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
+        // 横屏时刘海/灵动岛在左边，画面是全屏铺的，控件必须自己让开安全区，
+        // 否则左上角的关闭键会被压在灵动岛底下——看不见也点不到
+        .padding(.leading, 20 + safeInsets.left)
+        .padding(.trailing, 20 + safeInsets.right)
+        .padding(.top, 10 + safeInsets.top)
         .background(
             LinearGradient(colors: [.black.opacity(0.55), .clear],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
         )
+    }
+
+    /// 画面是全屏铺的，控件得自己按窗口的安全区让位
+    private var safeInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .first ?? .zero
     }
 
     private func bottomRows(landscape: Bool) -> some View {
@@ -297,9 +322,13 @@ struct VideoPage: View {
             ZStack {
                 // 传输键固定在正中，两侧的按钮多一个少一个都不会把它挤歪
                 HStack(spacing: 30) {
-                    transportButton("gobackward.10") { skip(-10) }
+                    transportButton("backward.end.fill", enabled: onPrevious != nil) {
+                        onPrevious?()
+                    }
                     transportButton(isPlaying ? "pause.fill" : "play.fill", size: 30) { toggle() }
-                    transportButton("goforward.10") { skip(10) }
+                    transportButton("forward.end.fill", enabled: onNext != nil) {
+                        onNext?()
+                    }
                 }
 
                 HStack {
@@ -316,8 +345,10 @@ struct VideoPage: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.bottom, landscape ? 8 : 96)   // 竖屏要让开预览页的底栏
+        .padding(.leading, 20 + safeInsets.left)
+        .padding(.trailing, 20 + safeInsets.right)
+        // 竖屏要让开预览页的底栏；横屏只让开 home 指示条
+        .padding(.bottom, landscape ? 8 + safeInsets.bottom : 96)
         .background(
             LinearGradient(colors: [.clear, .black.opacity(0.55)],
                            startPoint: .top, endPoint: .bottom)
@@ -325,7 +356,7 @@ struct VideoPage: View {
         )
     }
 
-    private func transportButton(_ icon: String, size: CGFloat = 22,
+    private func transportButton(_ icon: String, size: CGFloat = 22, enabled: Bool = true,
                                  action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
@@ -334,6 +365,8 @@ struct VideoPage: View {
                 .frame(width: 54, height: 48)
                 .contentShape(Rectangle())
         }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.3)
     }
 
     private var lockButton: some View {

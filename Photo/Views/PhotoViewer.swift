@@ -69,7 +69,9 @@ struct PhotoViewer: View {
                                       isCurrent: asset.id == currentID,
                                       chromeVisible: showChrome,
                                       onSingleTap: { withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() } },
-                                      onClose: { dismiss() })
+                                      onClose: { dismiss() },
+                                      onPrevious: neighbour(of: asset, in: live, step: -1),
+                                      onNext: neighbour(of: asset, in: live, step: 1))
                         } else {
                             ZoomableImage(asset: asset) {
                                 withAnimation(.easeOut(duration: 0.2)) { showChrome.toggle() }
@@ -198,6 +200,15 @@ struct PhotoViewer: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// 相邻的那一个。到头了返回 nil，播放器把按钮置灰。
+    private func neighbour(of asset: Asset, in live: [Asset], step: Int) -> (() -> Void)? {
+        guard let index = live.firstIndex(where: { $0.id == asset.id }) else { return nil }
+        let target = index + step
+        guard live.indices.contains(target) else { return nil }
+        let id = live[target].id
+        return { withAnimation(.easeInOut(duration: 0.25)) { currentID = id } }
     }
 
     /// 幻灯片下一张，到末尾回到第一张
