@@ -91,7 +91,8 @@ struct RootView: View {
             .background(Theme.background)
             .scrollIndicators(.hidden)
             .readingWidth($screenWidth)
-            .navigationTitle("相册")
+            // 叫「媒体」不叫「相册」：这里以后还要放视频
+            .navigationTitle("媒体")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)
             .toolbar {

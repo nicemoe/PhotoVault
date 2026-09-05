@@ -9,7 +9,7 @@ enum WebUI {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Photo</title>
+<title>百宝箱</title>
 <style>
 :root{
   --bg:#F4F5F7; --surface:#FFFFFF; --fill:#EBEDF1; --line:#E4E7EC;
@@ -183,7 +183,7 @@ header{
   <div class="wrap hbar">
     <div class="logo"><svg viewBox="0 0 24 24"><path d="M4 5h4l1.5-2h5L16 5h4a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm8 4a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z"/></svg></div>
     <div>
-      <div class="htitle">Photo</div>
+      <div class="htitle">百宝箱</div>
       <div class="hsub" id="devinfo">连接中…</div>
     </div>
     <div class="spacer"></div>
