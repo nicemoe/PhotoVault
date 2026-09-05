@@ -31,6 +31,7 @@ processorArchitecture='amd64' publicKeyToken='6595b64144ccf1df' language='*'\"")
 // ── 控件 ID ──────────────────────────────────────────────────────────
 enum {
     ID_LIST = 1001,
+    ID_QUALITY, ID_QUALITY_LABEL,
     ID_ADD_FILES, ID_ADD_FOLDER, ID_REMOVE, ID_CLEAR,
     ID_OUT_EDIT, ID_OUT_PICK,
     ID_START, ID_STOP,
@@ -59,7 +60,22 @@ struct Item {
 // ── 全局状态 ─────────────────────────────────────────────────────────
 static HWND g_main, g_list, g_outEdit, g_progress, g_status;
 static HWND g_btnStart, g_btnStop, g_btnAddFiles, g_btnAddFolder,
-            g_btnRemove, g_btnClear, g_btnOutPick, g_chkSkip;
+            g_btnRemove, g_btnClear, g_btnOutPick, g_chkSkip, g_quality;
+
+/// 画质档。CRF 越小越清楚、文件越大；preset 越慢压得越狠，同样画质文件更小。
+///
+/// 默认给「高」：这批片子是要留着看的，不是赶时间过一遍。CRF 18 在 x264 上
+/// 基本看不出和源的差别，slow 比 medium 慢六七成，但换来同画质下更小的体积。
+struct QualityLevel {
+    const wchar_t* label;
+    const wchar_t* preset;
+    int crf;
+};
+static const QualityLevel kQuality[] = {
+    { L"高画质（慢）",   L"slow",   18 },
+    { L"标准",           L"medium", 20 },
+    { L"快（画质一般）", L"veryfast", 23 },
+};
 static HFONT g_font;
 
 static std::vector<Item> g_items;
@@ -321,9 +337,9 @@ static bool ProbeFile(const std::wstring& path, Probe* out) {
 /// 而且要装到手机上才发现。不值。
 ///
 /// 重新编码的输出是 ffmpeg 自己排的时间戳，一定干净。
-static std::wstring PlanLabel(const Probe& p) {
-    if (p.vcodec == "h264" || p.vcodec == "hevc") return L"重新编码";
-    return L"重新编码（" + Widen(p.vcodec) + L"）";
+static std::wstring PlanLabel(const Probe& p, const QualityLevel& level) {
+    std::wstring codec = Widen(p.vcodec);
+    return std::wstring(level.label) + L"  ·  " + (codec.empty() ? L"?" : codec);
 }
 
 // ── 转换 ─────────────────────────────────────────────────────────────
@@ -376,6 +392,13 @@ static bool ConvertLine(const std::string& line, void* ctx) {
     return true;
 }
 
+/// 界面上选的是哪一档。工作线程会读它，所以只读控件、不改。
+static int CurrentQuality() {
+    int i = (int)SendMessageW(g_quality, CB_GETCURSEL, 0, 0);
+    if (i < 0 || i >= (int)(sizeof(kQuality) / sizeof(kQuality[0]))) return 0;
+    return i;
+}
+
 static void SetStatus(size_t index, const std::wstring& text, int percent) {
     {
         std::lock_guard<std::mutex> guard(g_lock);
@@ -403,7 +426,7 @@ static void ConvertOne(size_t index) {
         g_items[index].finished = true;
         return;
     }
-    std::wstring label = PlanLabel(probe);
+    std::wstring label = PlanLabel(probe, kQuality[CurrentQuality()]);
 
     std::wstring dstDir = Join(g_outDir, relDir);
     SHCreateDirectoryExW(nullptr, dstDir.c_str(), nullptr);
@@ -426,12 +449,15 @@ static void ConvertOne(size_t index) {
     bool inPlace = (Lower(dst) == Lower(src));
     std::wstring target = inPlace ? dst + L".tmp.mp4" : dst;
 
+    const QualityLevel& level = kQuality[CurrentQuality()];
     std::wstring cmd = L"\"" + g_ffmpeg + L"\" -hide_banner -nostdin -y"
         L" -i \"" + src + L"\""
         // 只要第一路视频和第一路音频。mkv 里常带字幕流，mp4 装不下，
         // 不显式挑的话 ffmpeg 会直接报错退出。
         L" -map 0:V:0 -map 0:a:0? -sn -dn"
-        L" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p"
+        L" -c:v libx264 -preset " + level.preset
+        + L" -crf " + std::to_wstring(level.crf)
+        + L" -pix_fmt yuv420p"
         L" -c:a aac -b:a 192k"
         // 时间戳全部重排。源文件的时间戳本来就可能是坏的（AVI 没有、
         // 被人硬套成 mp4 的也常是坏的），这里不继承，让 ffmpeg 重新排。
@@ -616,6 +642,10 @@ static void Layout(HWND hwnd) {
     place(g_btnRemove, 84);
     place(g_btnClear, 72);
 
+    MoveWindow(GetDlgItem(hwnd, ID_QUALITY_LABEL), W - pad - 150 - gap - 48, y + 5, 48, 22, TRUE);
+    // 下拉框的高度是展开后的总高，不是关着的那一条
+    MoveWindow(g_quality, W - pad - 150, y, 150, row + 120, TRUE);
+
     // 第二行：输出目录
     y += row + gap;
     x = pad;
@@ -649,6 +679,7 @@ static void UpdateButtons() {
     EnableWindow(g_btnRemove, idle);
     EnableWindow(g_btnClear, idle);
     EnableWindow(g_btnOutPick, idle);
+    EnableWindow(g_quality, idle);
 }
 
 static void StartQueue() {
@@ -778,6 +809,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_READONLY,
             0, 0, 0, 0, hwnd, (HMENU)ID_OUT_EDIT, nullptr, nullptr);
         SendMessageW(g_outEdit, WM_SETFONT, (WPARAM)g_font, TRUE);
+
+        HWND qlabel = CreateWindowExW(0, L"STATIC", L"画质：",
+            WS_CHILD | WS_VISIBLE | SS_RIGHT, 0, 0, 0, 0, hwnd,
+            (HMENU)ID_QUALITY_LABEL, nullptr, nullptr);
+        SendMessageW(qlabel, WM_SETFONT, (WPARAM)g_font, TRUE);
+
+        g_quality = CreateWindowExW(0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+            0, 0, 0, 0, hwnd, (HMENU)ID_QUALITY, nullptr, nullptr);
+        SendMessageW(g_quality, WM_SETFONT, (WPARAM)g_font, TRUE);
+        for (const QualityLevel& q : kQuality) {
+            SendMessageW(g_quality, CB_ADDSTRING, 0, (LPARAM)q.label);
+        }
+        SendMessageW(g_quality, CB_SETCURSEL, 0, 0);
 
         g_chkSkip = CreateWindowExW(0, L"BUTTON", L"跳过已经转好的",
             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
