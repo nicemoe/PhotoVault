@@ -138,7 +138,7 @@ struct FolderDetailView: View {
                                 Label("WiFi 上传", systemImage: "wifi")
                             }
                         } label: {
-                            Image(systemName: "plus").circleIcon()
+                            Image(systemName: "plus").circleIcon(weight: .medium)
                         }
 
                         PageMenu {
@@ -445,7 +445,12 @@ struct FolderDetailView: View {
                                  action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold))
+                // 必须 resizable + scaledToFit：直接用 font 渲染的话，
+                // 两个字形在各自 line box 里的高低不同，居中的是 line box
+                // 不是字形本身，看着就上下错开。缩放到同一个方框就对齐了。
+                .resizable()
+                .scaledToFit()
+                .frame(width: 19, height: 19)
                 .foregroundStyle(tint)
                 .frame(width: 44, height: 40)
                 .contentShape(Rectangle())

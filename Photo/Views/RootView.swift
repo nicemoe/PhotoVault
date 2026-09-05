@@ -253,7 +253,7 @@ struct RootView: View {
             }
 
         } label: {
-            Image(systemName: "plus").circleIcon()
+            Image(systemName: "plus").circleIcon(weight: .medium)
         }
     }
 

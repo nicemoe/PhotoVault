@@ -96,7 +96,7 @@ struct GroupDetailView: View {
                             Label("WiFi 上传", systemImage: "wifi")
                         }
                     } label: {
-                        Image(systemName: "plus").circleIcon()
+                        Image(systemName: "plus").circleIcon(weight: .medium)
                     }
 
                     PageMenu {
