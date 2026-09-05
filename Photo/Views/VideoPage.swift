@@ -1,10 +1,21 @@
 import SwiftUI
 import AVFoundation
 
+/// 强制屏幕方向。
+/// Info.plist 里已经允许竖屏和两个横屏方向，所以这里只是请求切换。
+enum ScreenOrientation {
+    @MainActor
+    static func request(landscape: Bool) {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait))
+    }
+}
+
 /// 承载 AVPlayerLayer 的裸视图。
 ///
 /// 不用 AVKit 的 VideoPlayer：它自带一整套控制条，会把点击全吃掉，
-/// 工具栏没法跟着单击开合，双指缩放也做不了。
+/// 工具栏没法跟着单击开合，缩放和快进手势也做不了。
 final class PlayerHostView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
@@ -38,7 +49,11 @@ struct PlayerLayerView: UIViewRepresentable {
     }
 }
 
-/// 预览页里的一段视频：可双指缩放，单击开合工具栏，播放控件跟着工具栏一起显示。
+/// 预览页里的一段视频。
+///
+/// 手势分两套，因为竖屏时左右滑要留给相册翻页：
+/// - 竖屏：单击开合工具栏，双击左右 ±10 秒，双指缩放
+/// - 横屏：横向拖动快进快退，左半竖拖调亮度，右半竖拖调音量
 struct VideoPage: View {
 
     let asset: Asset
@@ -53,8 +68,7 @@ struct VideoPage: View {
     @State private var duration: Double = 0
     @State private var scrubbing = false
     @State private var observer: Any?
-    /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
-    private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
+    @State private var rate: Float = 1
 
     // 缩放，和图片那边一套参数
     @State private var scale: CGFloat = 1
@@ -62,86 +76,103 @@ struct VideoPage: View {
     @State private var offset: CGSize = .zero
     @State private var steadyOffset: CGSize = .zero
 
+    // 拖动手势
+    private enum DragMode { case seek, brightness, volume }
+    @State private var dragMode: DragMode?
+    @State private var dragAnchor: Double = 0
+    @State private var hint: String?
+    @State private var hintToken = 0
+
+    /// 进来前的系统亮度，退出时还回去
+    @State private var systemBrightness: CGFloat?
+
+    /// 导入时探测不出时长和尺寸，就是 AVFoundation 解不了这个封装
+    private var unplayable: Bool { asset.duration <= 0 && asset.width == 0 }
+
     var body: some View {
         GeometryReader { geo in
-            // 按视频本身的比例给播放层定尺寸。
-            //
-            // 让播放层铺满整屏、由 AVPlayerLayer 自己做 aspect fit 的话，
-            // 多出来的部分是它画的黑边——浅色模式下背景是白的，看着就是
-            // 一块黑挡在中间；缩放时黑边也跟着一起放大。
-            let box = fitted(in: geo.size)
+            let landscape = geo.size.width > geo.size.height
 
             ZStack {
                 // 视频统一放在黑底上，和主流播放器一致，也让白色控件始终看得清
                 Color.black
 
                 if player != nil {
+                    // 铺满整页，比例交给 AVPlayerLayer 自己按真实画面算。
+                    //
+                    // 别拿 asset.width/height 去算一个框套在外面：那个尺寸是导入时
+                    // 探测的，和播放层实际显示的比例只要差一点（像素宽高比、旋转矩阵），
+                    // 播放层就会在这个框里再 fit 一次——两层 fit 叠加，左右会多出一圈
+                    // 永远消不掉的黑边。页面本来就是黑底，它自己留的黑边看不出来。
                     PlayerLayerView(player: player)
-                        .frame(width: box.width, height: box.height)
+                        .frame(width: geo.size.width, height: geo.size.height)
                         .scaleEffect(scale)
                         .offset(offset)
-                } else {
+                } else if !unplayable {
                     // 播放器还没建好时先摆封面，翻到这一页不至于是一片黑
                     AssetImage(asset: asset, maxPixel: 900)
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: box.width, height: box.height)
+                        .frame(width: geo.size.width, height: geo.size.height)
                 }
 
                 if unplayable {
-                    // 存住了但 iOS 解不了（mkv、rmvb 这些）。
-                    // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
-                    VStack(spacing: 10) {
-                        Image(systemName: "film")
-                            .font(.system(size: 40))
-                        Text("这个格式 iOS 无法播放")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("文件已保存，可以用右下角分享导出")
-                            .font(.system(size: 12))
-                            .opacity(0.7)
-                    }
-                    .foregroundStyle(.white.opacity(0.75))
+                    unplayableNote
                 } else if chromeVisible {
-                    controls
+                    controls(landscape: landscape)
+                        .transition(.opacity)
+                }
+
+                if let hint {
+                    Text(hint)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.6), in: Capsule())
                         .transition(.opacity)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(magnifyGesture)
-            .simultaneousGesture(panGesture, including: scale > 1.01 ? .all : .subviews)
+            .simultaneousGesture(dragGesture(size: geo.size, landscape: landscape),
+                                 including: (scale > 1.01 || landscape) ? .all : .subviews)
             // 双击必须写在单击前面，否则单击会先把手势吃掉
-            .onTapGesture(count: 2) {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                    if scale > 1.01 {
-                        scale = 1; steadyScale = 1
-                        offset = .zero; steadyOffset = .zero
-                    } else {
-                        scale = 2.2; steadyScale = 2.2
-                    }
-                }
+            .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                handleDoubleTap(at: location, width: geo.size.width)
             }
             .onTapGesture { onSingleTap() }
         }
         .onChange(of: isCurrent, initial: true) { _, current in
             if current { start() } else { stop() }
         }
-        .onDisappear { stop() }
+        .onDisappear {
+            stop()
+            restoreBrightness()
+            // 不在这里转回竖屏：横屏下翻到下一个视频时这一页也会消失，
+            // 转回去等于把用户刚摆好的方向掰回来。交给预览页整体退出时做。
+        }
     }
 
-    /// 按视频比例算出在这块区域里的最大尺寸
-    private func fitted(in size: CGSize) -> CGSize {
-        guard size.width > 1, size.height > 1 else { return size }
-        // 元信息缺失时按整块区域算，至少不会缩成一条
-        let ratio = asset.aspectRatio > 0.01 ? asset.aspectRatio : size.width / size.height
-        let byWidth = CGSize(width: size.width, height: size.width / ratio)
-        return byWidth.height <= size.height
-             ? byWidth
-             : CGSize(width: size.height * ratio, height: size.height)
+    // MARK: 控件
+
+    private var unplayableNote: some View {
+        // 存住了但 iOS 解不了（mkv、rmvb 这些）。
+        // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
+        VStack(spacing: 10) {
+            Image(systemName: "film")
+                .font(.system(size: 40))
+            Text("这个格式 iOS 无法播放")
+                .font(.system(size: 14, weight: .semibold))
+            Text("文件已保存，可以用底栏分享导出")
+                .font(.system(size: 12))
+                .opacity(0.7)
+        }
+        .foregroundStyle(.white.opacity(0.75))
     }
 
-    // MARK: 播放控件
-
-    private var controls: some View {
+    private func controls(landscape: Bool) -> some View {
         VStack {
             Spacer()
 
@@ -152,41 +183,87 @@ struct VideoPage: View {
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 64, height: 64)
-                    .background(.black.opacity(0.35), in: Circle())
+                    .background(.black.opacity(0.4), in: Circle())
             }
 
             Spacer()
 
-            HStack(spacing: 10) {
-                Text(timeText(current))
-                Slider(value: Binding(
-                    get: { duration > 0 ? min(current / duration, 1) : 0 },
-                    set: { ratio in
-                        current = ratio * duration
-                        seek(to: current)
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Text(timeText(current))
+                    Slider(value: Binding(
+                        get: { duration > 0 ? min(current / duration, 1) : 0 },
+                        set: { ratio in
+                            current = ratio * duration
+                            seek(to: current)
+                        }
+                    ), onEditingChanged: { editing in
+                        scrubbing = editing
+                        // 松手后再恢复播放，拖的过程中让画面跟着走
+                        if !editing, isPlaying { player?.play() }
+                    })
+                    Text(timeText(duration))
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+
+                HStack(spacing: 18) {
+                    Menu {
+                        ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { value in
+                            Button {
+                                setRate(Float(value))
+                            } label: {
+                                Label(value == 1 ? "正常" : "\(trimZero(value))×",
+                                      systemImage: rate == Float(value) ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
+                        controlChip(rate == 1 ? "倍速" : "\(trimZero(Double(rate)))×",
+                                    icon: "speedometer")
                     }
-                ), onEditingChanged: { editing in
-                    scrubbing = editing
-                    // 松手后再恢复播放，拖的过程中让画面跟着走
-                    if !editing, isPlaying { player?.play() }
-                })
-                Text(timeText(duration))
+
+                    Spacer()
+
+                    Button {
+                        setLandscape(!landscape)
+                    } label: {
+                        controlChip(landscape ? "竖屏" : "横屏",
+                                    icon: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                    }
+                }
             }
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(.black.opacity(0.45), in: Capsule())
-            .padding(.horizontal, 20)
-            .padding(.bottom, 118)   // 让开底栏，别贴着它
+            .padding(.vertical, 12)
+            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.bottom, landscape ? 24 : 118)   // 竖屏要让开底栏
         }
+    }
+
+    private func controlChip(_ text: String, icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12.5, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.white.opacity(0.16), in: Capsule())
+    }
+
+    private func trimZero(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.2g", value)
     }
 
     private func timeText(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds > 0 else { return "0:00" }
         let total = Int(seconds.rounded())
-        return String(format: "%d:%02d", total / 60, total % 60)
+        return total >= 3600
+            ? String(format: "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
+            : String(format: "%d:%02d", total / 60, total % 60)
     }
 
     // MARK: 播放
@@ -200,6 +277,7 @@ struct VideoPage: View {
         let item = AVPlayerItem(url: LibraryStore.fileURL(for: asset))
         let made = AVPlayer(playerItem: item)
         made.actionAtItemEnd = .pause
+        made.defaultRate = rate
         player = made
         duration = asset.duration
 
@@ -207,7 +285,7 @@ struct VideoPage: View {
         observer = made.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
         ) { time in
-            guard !scrubbing else { return }
+            guard !scrubbing, dragMode != .seek else { return }
             current = time.seconds
             if duration <= 0, let d = made.currentItem?.duration.seconds, d.isFinite {
                 duration = d
@@ -215,6 +293,7 @@ struct VideoPage: View {
         }
 
         made.play()
+        made.rate = rate
         isPlaying = true
     }
 
@@ -238,6 +317,7 @@ struct VideoPage: View {
             // 播完了再按就从头来
             if duration > 0, current >= duration - 0.15 { seek(to: 0) }
             player.play()
+            player.rate = rate
         }
         isPlaying.toggle()
     }
@@ -247,7 +327,63 @@ struct VideoPage: View {
                      toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
+    private func setRate(_ value: Float) {
+        rate = value
+        player?.defaultRate = value
+        if isPlaying { player?.rate = value }
+        show(hint: value == 1 ? "正常速度" : "\(trimZero(Double(value)))× 速度")
+    }
+
+    private func skip(_ delta: Double) {
+        guard !unplayable, duration > 0 else { return }
+        let target = min(max(0, current + delta), duration)
+        current = target
+        seek(to: target)
+        show(hint: delta > 0 ? "快进 \(Int(delta)) 秒" : "后退 \(Int(-delta)) 秒")
+    }
+
+    private func setLandscape(_ on: Bool) { ScreenOrientation.request(landscape: on) }
+
+    // MARK: 提示
+
+    private func show(hint text: String) {
+        hintToken &+= 1
+        let token = hintToken
+        withAnimation(.easeOut(duration: 0.12)) { hint = text }
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            // 期间又有新提示的话就别把新的擦掉
+            guard token == hintToken else { return }
+            withAnimation(.easeOut(duration: 0.2)) { hint = nil }
+        }
+    }
+
+    private func restoreBrightness() {
+        if let systemBrightness {
+            UIScreen.main.brightness = systemBrightness
+            self.systemBrightness = nil
+        }
+    }
+
     // MARK: 手势
+
+    private func handleDoubleTap(at location: CGPoint, width: CGFloat) {
+        let third = width / 3
+        if location.x < third {
+            skip(-10)
+        } else if location.x > third * 2 {
+            skip(10)
+        } else {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                if scale > 1.01 {
+                    scale = 1; steadyScale = 1
+                    offset = .zero; steadyOffset = .zero
+                } else {
+                    scale = 2.2; steadyScale = 2.2
+                }
+            }
+        }
+    }
 
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
@@ -265,13 +401,61 @@ struct VideoPage: View {
             }
     }
 
-    private var panGesture: some Gesture {
-        DragGesture()
+    /// 放大后拖动是平移；否则横屏下横拖快进、竖拖调亮度/音量。
+    ///
+    /// 竖屏不接管横向拖动——那是相册左右翻页用的。竖屏想快进就双击左右两侧。
+    private func dragGesture(size: CGSize, landscape: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 8)
             .onChanged { value in
-                guard scale > 1.01 else { return }
-                offset = CGSize(width: steadyOffset.width + value.translation.width,
-                                height: steadyOffset.height + value.translation.height)
+                if scale > 1.01 {
+                    offset = CGSize(width: steadyOffset.width + value.translation.width,
+                                    height: steadyOffset.height + value.translation.height)
+                    return
+                }
+                guard landscape, !unplayable else { return }
+
+                if dragMode == nil {
+                    let horizontal = abs(value.translation.width) > abs(value.translation.height)
+                    if horizontal {
+                        dragMode = .seek
+                        dragAnchor = current
+                    } else {
+                        dragMode = value.startLocation.x < size.width / 2 ? .brightness : .volume
+                        dragAnchor = dragMode == .brightness
+                            ? Double(UIScreen.main.brightness)
+                            : Double(player?.volume ?? 1)
+                        if dragMode == .brightness, systemBrightness == nil {
+                            systemBrightness = UIScreen.main.brightness
+                        }
+                    }
+                }
+
+                switch dragMode {
+                case .seek:
+                    guard duration > 0 else { return }
+                    // 整屏宽度对应本片长度的一半，短片也不会一划到底
+                    let span = min(duration, max(60, duration / 2))
+                    let delta = Double(value.translation.width / size.width) * span
+                    current = min(max(0, dragAnchor + delta), duration)
+                    show(hint: "\(timeText(current)) / \(timeText(duration))")
+                case .brightness:
+                    let delta = Double(-value.translation.height / size.height)
+                    let level = min(max(0, dragAnchor + delta), 1)
+                    UIScreen.main.brightness = CGFloat(level)
+                    show(hint: "亮度 \(Int(level * 100))%")
+                case .volume:
+                    let delta = Double(-value.translation.height / size.height)
+                    let level = min(max(0, dragAnchor + delta), 1)
+                    player?.volume = Float(level)
+                    show(hint: "音量 \(Int(level * 100))%")
+                case nil:
+                    break
+                }
             }
-            .onEnded { _ in steadyOffset = offset }
+            .onEnded { _ in
+                if dragMode == .seek { seek(to: current) }
+                dragMode = nil
+                steadyOffset = offset
+            }
     }
 }

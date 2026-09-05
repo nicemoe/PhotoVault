@@ -18,6 +18,7 @@ struct PhotoViewer: View {
     @State private var showChrome = true
     @State private var showDeleteConfirm = false
     @State private var isPlaying = false
+    @State private var isLandscape = false
 
     init(assets: [Asset], startIndex: Int, folderID: UUID) {
         self.assets = assets
@@ -44,6 +45,9 @@ struct PhotoViewer: View {
     }
 
     private var controlTint: Color { onDarkSurface ? .white : Theme.viewerLabel }
+
+    /// 横屏 + 当前是视频 = 全屏播放姿势
+    private var isLandscapeVideo: Bool { isLandscape && onDarkSurface }
 
     var body: some View {
         let live = liveAssets
@@ -77,7 +81,9 @@ struct PhotoViewer: View {
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
 
-            if showChrome {
+            // 横屏看视频时不再显示上下两条栏：那是全屏播放的姿势，
+            // 播放控件由视频页自己出，两套栏叠在一起会互相压住
+            if showChrome, !isLandscapeVideo {
                 VStack {
                     topBar(total: live.count, position: position)
                     Spacer()
@@ -86,7 +92,12 @@ struct PhotoViewer: View {
                 .transition(.opacity)
             }
         }
-        .statusBarHidden(!showChrome)
+        .onGeometryChange(for: Bool.self) { proxy in
+            proxy.size.width > proxy.size.height
+        } action: { landscape in
+            isLandscape = landscape
+        }
+        .statusBarHidden(!showChrome || isLandscapeVideo)
         // 幻灯片：isPlaying 变化时 task 重启，停止时自动取消
         .task(id: isPlaying) {
             guard isPlaying else { return }
@@ -103,6 +114,8 @@ struct PhotoViewer: View {
         .onDisappear {
             isPlaying = false
             UIApplication.shared.isIdleTimerDisabled = wifi.isRunning
+            // 退出预览时把方向掰回竖屏，别把整个 App 留在横屏上
+            ScreenOrientation.request(landscape: false)
         }
         .confirmationDialog(current?.isVideo == true ? "删除这个视频？" : "删除这张照片？",
                             isPresented: $showDeleteConfirm, titleVisibility: .visible) {
