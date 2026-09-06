@@ -204,17 +204,30 @@ final class BookLibrary {
 
         guard !parsed.chapters.isEmpty else { throw ImportError.empty }
 
-        // 落盘：每章一个文件
+        // 落盘：每章一个文件。整批导入时这一步才是大头，不是正则分章，
+        // 所以三件事都要注意：目录只建一次、不走 atomic、别占着主线程。
         let bookID = UUID()
-        var metas: [ChapterMeta] = []
-        var total = 0
-        for (i, chapter) in parsed.chapters.enumerated() {
-            let body = chapter.body
-            let file = BookPaths.chapterFile(bookID: bookID, index: i)
-            try? Data(body.utf8).write(to: file, options: .atomic)
-            metas.append(ChapterMeta(index: i, title: chapter.title, characterCount: body.count))
-            total += body.count
-        }
+        let chapters = parsed.chapters
+        let (metas, total) = await Task.detached(priority: .userInitiated) {
+            () -> ([ChapterMeta], Int) in
+            // 目录建一次就够。原来每章都通过 chapterFile() 走一遍 directory()，
+            // 而它里面有 createDirectory —— 一本 500 章的书就是 500 次多余的
+            // 系统调用，一次导入上千本时这笔账很吓人。
+            let dir = BookPaths.directory(for: bookID)
+            var metas: [ChapterMeta] = []
+            var total = 0
+            for (i, chapter) in chapters.enumerated() {
+                let body = chapter.body
+                // 不用 .atomic。索引是在全部章节写完之后才写的，中途被杀只会
+                // 留下一堆没人引用的孤儿文件，不会产生半本坏书；而 atomic 要
+                // 先写临时文件再 rename，每章多一倍的文件系统操作。
+                try? Data(body.utf8).write(to: dir.appendingPathComponent("\(i).txt"))
+                metas.append(ChapterMeta(index: i, title: chapter.title,
+                                         characterCount: body.count))
+                total += body.count
+            }
+            return (metas, total)
+        }.value
 
         let book = Book(id: bookID,
                         title: parsed.title,

@@ -47,9 +47,10 @@ enum ChapterSplitter {
             .replacingOccurrences(of: "\r", with: "\n")
             .replacingOccurrences(of: "\u{FEFF}", with: "")
             .replacingOccurrences(of: "\u{200B}", with: "")
-        while s.contains("\n\n\n") {
-            s = s.replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        }
+        // 连着三个以上的换行一律压成两个，一次正则扫完。
+        // 原来是 while contains("\n\n\n") 反复替换：每轮都要把整串扫一遍再
+        // 复制一遍，碰上连着几十个空行的文件就得来回复制几十次。
+        s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
