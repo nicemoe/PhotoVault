@@ -75,6 +75,40 @@ final class BookLibrary {
         settings = index.settings
         shelfLayout = index.shelfLayout
         appearance = index.appearance
+        repairTitles()
+    }
+
+    /// 把已经存坏的书名修回来。
+    ///
+    /// 网页上传那条路以前拿 UUID 当前缀拼临时文件名，而书名是从文件名取的，
+    /// 于是那批书全叫「<一长串 UUID>-书名」。导入那边已经改了，但已经进来的
+    /// 书还顶着这个名字，总不能让人一本本手动改。
+    private func repairTitles() {
+        var fixed = false
+        for i in books.indices {
+            let clean = Self.stripUUIDPrefix(books[i].title)
+            guard clean != books[i].title, !clean.isEmpty else { continue }
+            books[i].title = clean
+            fixed = true
+        }
+        if fixed { scheduleSave() }
+    }
+
+    /// 开头是不是「8-4-4-4-12 个十六进制字符 + 短横」，是就剁掉
+    private static func stripUUIDPrefix(_ title: String) -> String {
+        let groups = [8, 4, 4, 4, 12]
+        var index = title.startIndex
+        for (n, count) in groups.enumerated() {
+            for _ in 0..<count {
+                guard index < title.endIndex, title[index].isHexDigit else { return title }
+                index = title.index(after: index)
+            }
+            // 每组后面都跟一个短横，最后一组后面那个是和书名之间的分隔
+            guard index < title.endIndex, title[index] == "-" else { return title }
+            index = title.index(after: index)
+            _ = n
+        }
+        return String(title[index...])
     }
 
     private var saveTask: Task<Void, Never>?
@@ -198,10 +232,18 @@ final class BookLibrary {
     /// 网页端上传用：直接给数据和文件名
     @discardableResult
     func importBook(data: Data, fileName: String) async throws -> Book {
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + "-" + fileName)
+        // 临时文件放进一个独有的子目录，文件名保持原样。
+        //
+        // 原来是拿 UUID 当前缀直接拼在文件名前面防重名，但书名正是从文件名
+        // 取的，于是从网页传上来的书全都叫「<一长串 UUID>-书名」。
+        // 换成用目录隔离，重名照样避得开，文件名不用动。
+        let box = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: box) }
+
+        let temp = box.appendingPathComponent((fileName as NSString).lastPathComponent)
         try data.write(to: temp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: temp) }
         return try await importBook(from: temp)
     }
 
