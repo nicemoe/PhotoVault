@@ -183,39 +183,70 @@ final class BookLibrary {
         saveNow()
     }
 
-    /// 搬一本书，返回它最终的目录名。可以重跑。
+    /// 搬一本书，返回它最终的目录名。可以重跑，也能接上被掐断的那一次。
     nonisolated private static func relayout(book: Book, claimed: Set<String>) -> String {
         let fm = FileManager.default
         let base = FileNames.sanitize(book.title)
-        // 名字被别的书占了就带上 id 的前八位。这样同一本书每次算出来都一样，
-        // 上次搬完没来得及存索引，这次还能认回同一个目录。
-        let name = claimed.contains(base.lowercased())
-            ? base + " [" + String(book.id.uuidString.prefix(8)) + "]"
-            : base
-
         let old = BookPaths.root.appendingPathComponent(book.id.uuidString, isDirectory: true)
-        let new = BookPaths.directory(named: name)
 
-        let dir: URL
+        // 一、还没搬过，UUID 目录还在
         if fm.fileExists(atPath: old.path) {
-            dir = old
-        } else if fm.fileExists(atPath: new.path) {
-            dir = new            // 上次搬完了但没存下索引，接着把章节名收尾
-        } else {
-            return name          // 文件本来就没了，名字照样补上，免得每次启动重来
+            let name = freshName(base: base, claimed: claimed, fallbackID: book.id)
+            renameChapters(in: old, chapters: book.chapters)
+            // 先改章节名、最后才改目录名：反过来的话中途被掐断，
+            // 光看目录在哪儿分不清章节改到第几个
+            try? fm.moveItem(at: old, to: BookPaths.directory(named: name))
+            return name
         }
 
-        // 先改章节名，最后才改目录名。反过来的话中途崩了，
-        // 光看目录在哪儿分不清章节改到第几个。
-        for chapter in book.chapters {
+        // 二、上次目录已经改过名，但索引没来得及存下来。
+        //
+        // 那一次是按「书名」「书名 (2)」「书名 (3)」…这么起名的，所以挨个
+        // 试过去，找一个磁盘上确实存在、又还没被别的书认领的。不这么找的话，
+        // 两本同名的书这次算出来的名字都是「书名」，第二本会认到第一本的目录上。
+        if let adopted = adopt(base: base, claimed: claimed) {
+            renameChapters(in: BookPaths.directory(named: adopted), chapters: book.chapters)
+            return adopted
+        }
+
+        // 三、文件本来就没了。名字照样补上，免得每次启动都重来一遍。
+        return freshName(base: base, claimed: claimed, fallbackID: book.id)
+    }
+
+    nonisolated private static func renameChapters(in dir: URL, chapters: [ChapterMeta]) {
+        let fm = FileManager.default
+        for chapter in chapters {
             let from = dir.appendingPathComponent("\(chapter.index).txt")
             guard fm.fileExists(atPath: from.path) else { continue }
             let to = dir.appendingPathComponent(
                 BookPaths.chapterName(index: chapter.index, title: chapter.title))
             if from != to { try? fm.moveItem(at: from, to: to) }
         }
-        if dir == old { try? fm.moveItem(at: old, to: new) }
-        return name
+    }
+
+    /// 挑一个还没被别的书认领、磁盘上也还不存在的名字
+    nonisolated private static func freshName(base: String, claimed: Set<String>,
+                                              fallbackID: UUID) -> String {
+        let fm = FileManager.default
+        for n in 1...50 {
+            let candidate = n == 1 ? base : "\(base) (\(n))"
+            if claimed.contains(candidate.lowercased()) { continue }
+            if fm.fileExists(atPath: BookPaths.directory(named: candidate).path) { continue }
+            return candidate
+        }
+        // 五十个都占着，用 id 兜底，至少保证唯一
+        return base + " [" + String(fallbackID.uuidString.prefix(8)) + "]"
+    }
+
+    /// 认领一个上次已经改好名、但索引没存下的目录
+    nonisolated private static func adopt(base: String, claimed: Set<String>) -> String? {
+        let fm = FileManager.default
+        for n in 1...50 {
+            let candidate = n == 1 ? base : "\(base) (\(n))"
+            if claimed.contains(candidate.lowercased()) { continue }
+            if fm.fileExists(atPath: BookPaths.directory(named: candidate).path) { return candidate }
+        }
+        return nil
     }
 
     /// 把已经存坏的书名修回来。
