@@ -31,6 +31,9 @@ enum Paths {
             文件不会被搬走也不会改名。在这里删掉的，App 里也会跟着消失。
 
             分组那一层是必须的：直接躺在 Media 根下的文件不会被收。
+
+            这个文件夹里只有你自己的照片和视频，没有 App 记账用的东西——
+            分组记录、视频封面都收在 App 内部，不用也不该在这儿管。
             """
             try? Data(text.utf8).write(to: readme, options: .atomic)
         }
@@ -39,13 +42,28 @@ enum Paths {
 
     /// 视频封面缓存。
     /// 抽一帧要一两百毫秒，只放内存的话每次冷启动划列表都会卡，所以落盘。
+    ///
+    /// 原来放在 Documents 里，和 Media 并排——那是把 App 自己的中间产物
+    /// 摆进了人的文件夹。它是从视频里抽出来的，删了会自己重生，
+    /// 不该出现在访达里。
     static let posters: URL = {
-        let url = documents.appendingPathComponent("Posters", isDirectory: true)
+        let url = AppStore.root.appendingPathComponent("Posters", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        AppStore.migrateDirFromDocuments("Posters", to: url)
+        // 封面能重新抽，没必要让它把 iCloud 备份撑大
+        AppStore.excludeFromBackup(url)
         return url
     }()
 
-    static let libraryFile = documents.appendingPathComponent("library.json")
+    /// 分组、目录、每个文件的记录。
+    ///
+    /// 早先放在 Documents 里，还给它打过 BSD 的 immutable 标志让访达改不动。
+    /// 那是在补一个不该存在的问题——搬进内部目录，它压根就不出现在那儿。
+    static let libraryFile: URL = {
+        let url = AppStore.file("library.json")
+        AppStore.migrateFromDocuments("library.json", to: url)
+        return url
+    }()
 
     static func url(for asset: Asset) -> URL {
         media.appendingPathComponent(asset.fileName)
@@ -92,11 +110,9 @@ final class LibraryStore {
         guard let decoded = try? Coders.makeDecoder().decode(Library.self, from: data) else {
             let stamp = ISO8601DateFormatter().string(from: Date())
                 .replacingOccurrences(of: ":", with: "-")
-            // 索引平时是锁住的，挪走之前得先摘锁
-            LockedFile.unlock(Paths.libraryFile)
             try? FileManager.default.moveItem(
                 at: Paths.libraryFile,
-                to: Paths.documents.appendingPathComponent("library.损坏-\(stamp).json"))
+                to: AppStore.file("library.损坏-\(stamp).json"))
             return
         }
         library = decoded
@@ -123,7 +139,7 @@ final class LibraryStore {
 
     private nonisolated static func write(_ snapshot: Library) async {
         guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
-        LockedFile.write(data, to: Paths.libraryFile)
+        try? data.write(to: Paths.libraryFile, options: .atomic)
     }
 
     // MARK: 查询
@@ -713,36 +729,69 @@ final class LibraryStore {
 
 }
 
-// MARK: - 只读落盘
+// MARK: - App 内部目录
 
-/// 写一份在访达里改不动、删不掉的文件。
+/// App 内部目录。放索引、封面这些「我们自己记账用」的东西。
 ///
-/// 开了文件共享之后 Documents 整个是敞开的，索引就摆在 Media 旁边。
-/// 它是给人看的——想知道 App 怎么记账，打开看一眼、拷一份走都行；
-/// 但不该给人改：手改坏了，重建虽然救得回图库，收藏和排序还是没了。
+/// 和 Documents 的分工：Documents 开了文件共享，访达里看得见、拖得动，
+/// 那里只该放人自己的东西——照片和视频。索引和封面不是人的东西，
+/// 它们是实现细节，摆在媒体旁边只会让人误以为该管，手删了还得连累收藏和排序。
 ///
-/// iOS 没有「对 App 可写、对访达只读」这种开关，两边是同一个身份。
-/// 能用的是 BSD 的 user immutable 标志（就是 `chflags uchg`）：
-/// 打上之后，写、改名、删除一律 EPERM，访达里会直接报错做不了。
-/// App 自己也一样被挡，所以每次落盘前先摘掉、写完再打上。
-///
-/// 单说 0444 那种只读权限位是不够的：能不能删一个文件，看的是所在目录
-/// 的写权限，不是文件自己的——只读文件照样能在访达里拖进废纸篓。
-enum LockedFile {
+/// 原来试过留在 Documents 里、给文件打 BSD 的 immutable 标志（`chflags uchg`）
+/// 让访达改不动。能work，但那是在补一个不该存在的问题——最省事的办法是
+/// 它压根就不出现在那儿。
+enum AppStore {
 
-    static func write(_ data: Data, to url: URL) {
+    static let root: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
+
+    static func file(_ name: String) -> URL { root.appendingPathComponent(name) }
+
+    /// 从 Documents 搬一个文件进来。旧版本把它放在共享目录里，这里搬一次家。
+    ///
+    /// 目标已经在了就不动——搬过一次之后 Documents 那份如果又冒出来
+    /// （从备份恢复、别的设备同步过来），也是旧的，不该盖掉现在这份。
+    static func migrateFromDocuments(_ name: String, to target: URL) {
         let fm = FileManager.default
-        // 原子写是「写个临时文件再改名盖上去」，盖不掉一个上了锁的文件，
-        // 所以先摘锁。中途被杀最多是这一次没锁上，下次写完照样补上。
-        unlock(url)
-        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
-        // 原子写换的是一个新 inode，锁不会跟过来，得重新打
-        try? fm.setAttributes([.immutable: true], ofItemAtPath: url.path)
+        let old = Paths.documents.appendingPathComponent(name)
+        guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: target.path) else { return }
+        // 旧版本给索引上过 immutable 锁，锁着的文件搬不动，先摘掉
+        try? fm.setAttributes([.immutable: false], ofItemAtPath: old.path)
+        try? fm.moveItem(at: old, to: target)
     }
 
-    /// 摘锁。要移动、删除这个文件之前必须先来一下，否则一律 EPERM。
-    static func unlock(_ url: URL) {
-        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: url.path)
+    /// 从 Documents 搬一个目录里的东西进来。
+    ///
+    /// 不能像文件那样直接 move：新目录在这之前已经建好了，move 到一个
+    /// 已存在的路径会失败。逐个搬，搬完把空掉的旧目录删了。
+    /// 封面丢了会自己重新抽，所以搬不动的那几张就算了，不值得为它报错。
+    static func migrateDirFromDocuments(_ name: String, to target: URL) {
+        let fm = FileManager.default
+        let old = Paths.documents.appendingPathComponent(name, isDirectory: true)
+        guard let names = try? fm.contentsOfDirectory(atPath: old.path) else { return }
+        for item in names {
+            try? fm.moveItem(at: old.appendingPathComponent(item),
+                             to: target.appendingPathComponent(item))
+        }
+        if (try? fm.contentsOfDirectory(atPath: old.path))?.isEmpty == true {
+            try? fm.removeItem(at: old)
+        }
+    }
+
+    /// 从 iCloud/iTunes 备份里排除。
+    ///
+    /// 给能重算的东西用——封面丢了从视频里再抽一帧就有，没必要让它把
+    /// 用户的备份撑大。索引不用排除：收藏、排序、看到第几秒只此一份，
+    /// 换手机的时候恰恰是最该跟过去的。
+    static func excludeFromBackup(_ url: URL) {
+        var url = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
     }
 }
 

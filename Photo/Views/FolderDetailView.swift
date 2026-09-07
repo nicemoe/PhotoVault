@@ -494,6 +494,14 @@ struct FolderDetailView: View {
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
             // 先按文件取，这样能拿到原始文件名当标题
             let picked = try? await item.loadTransferable(type: PickedFile.self)
+            // 相册给的是一份拷贝，落在临时目录里。用 defer 统一收拾：
+            // 原来是在每个分支里各删一次，而「文件拿到了但读不出内容」那条
+            // 分支会掉到最后的按字节读上，那份拷贝就没人管了——一次导几百张
+            // 4K 视频，攒下来是几十上百 GB。视频那条路 persistVideo 是把文件
+            // 搬走的，这里再删一次删的是不存在的路径，无害。
+            defer {
+                if let picked { try? FileManager.default.removeItem(at: picked.url) }
+            }
 
             if isVideo {
                 // 视频必须按文件搬。手机拍的 1 分钟 4K 就有几百 MB，
@@ -501,14 +509,11 @@ struct FolderDetailView: View {
                 if let picked {
                     if await store.addVideo(from: picked.url, to: folderID,
                                             name: picked.name) != nil { videos += 1 }
-                    // persistVideo 成功时是移动走的，失败才留下，这里兜底清一次
-                    try? FileManager.default.removeItem(at: picked.url)
                 }
             } else if let picked, let data = try? Data(contentsOf: picked.url) {
                 if await store.addImage(data: data, to: folderID, name: picked.name) != nil {
                     photos += 1
                 }
-                try? FileManager.default.removeItem(at: picked.url)
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       await store.addImage(data: data, to: folderID) != nil {
                 // 有些来源给不出文件表示，退回按字节读，只是没有标题
