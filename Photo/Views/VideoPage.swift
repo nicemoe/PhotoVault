@@ -226,6 +226,10 @@ struct VideoPage: View {
     var onLeave: ((Double) -> Void)?
     /// 在播 / 没在播。外面拿它决定要不要拦着屏幕自动锁。
     var onPlaybackChange: ((Bool) -> Void)?
+    /// 播完之后怎么办：停下 / 单个循环 / 接着放下一个
+    var mode: PlaybackMode = .once
+    /// 人换了播放方式，记到设置里
+    var onModeChange: ((PlaybackMode) -> Void)?
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -454,6 +458,7 @@ struct VideoPage: View {
 
             Spacer(minLength: 12)
 
+            playbackModeButton
             speedMenu
 
             Button(action: onClose) {
@@ -589,6 +594,25 @@ struct VideoPage: View {
                 .frame(width: 38, height: 38)
                 .background(locked ? AnyShapeStyle(.black.opacity(0.5)) : AnyShapeStyle(.clear),
                             in: Circle())
+        }
+    }
+
+    /// 播完之后怎么办。点一下换下一种：停下 → 连续 → 单个循环 → 停下。
+    ///
+    /// 用图标不用文字：三种状态各有一个现成的符号（箭头到底、列表往下、
+    /// 循环 1），比「连续」「循环」这种字更快认出来，也不会把顶栏挤满。
+    /// 非默认状态点亮成主题色，一眼能看出现在不是「播完停下」。
+    private var playbackModeButton: some View {
+        Button {
+            let next = mode.next
+            onModeChange?(next)
+            show(hint: next.label)
+        } label: {
+            Image(systemName: mode.icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(mode == .once ? .white : Theme.accent)
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
         }
     }
 
@@ -744,10 +768,7 @@ struct VideoPage: View {
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { _ in
-            Task { @MainActor in
-                isPlaying = false
-                if duration > 0 { current = duration }
-            }
+            Task { @MainActor in finish() }
         }
 
         // 从上次的位置接着播，别退回开头
@@ -772,6 +793,31 @@ struct VideoPage: View {
     /// notifyOthersOnDeactivation 就是那句「我用完了，你继续」。
     static func releaseAudioSession() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// 一段放完了。
+    ///
+    /// 三种走法。注意「连续播放」在没有下一个的时候要退回停下——
+    /// 不然最后一个播完会一直显示成在播，进度条停在末尾，人还等着它动。
+    private func finish() {
+        if duration > 0 { current = duration }
+        switch mode {
+        case .once:
+            isPlaying = false
+        case .loop:
+            seek(to: 0)
+            current = 0
+            player?.play()
+            player?.rate = rate
+        case .queue:
+            guard let onNext else {
+                isPlaying = false
+                return
+            }
+            // 交给外面换人。这一页会被整个重建（预览页给它绑了 asset 的身份），
+            // 所以这儿不用收拾自己的状态。
+            onNext()
+        }
     }
 
     private func stop() {

@@ -77,6 +77,16 @@ struct PhotoViewer: View {
                 // 与其一处处去猜是哪层缩了它，不如让视频页直接对着窗口铺。
                 // 换上一个/下一个用底部的传输键。
                 videoPage(for: asset, in: live)
+                    // 绑上这一个 asset 的身份。
+                    //
+                    // 不绑的话，换到下一个视频时 SwiftUI 认为还是同一个视图，
+                    // @State 里的播放器、进度、时长原样留着，isCurrent 也一直
+                    // 是 true——那两个 onChange 都不会触发，于是标题换了、
+                    // 画面还在放上一个。「点上一个下一个没反应」就是这么来的。
+                    //
+                    // 图片那条路走的是 TabView + ForEach，每页自带身份，
+                    // 所以只有这条单独铺的视频分支会踩到。
+                    .id(asset.id)
                     .ignoresSafeArea()
             } else {
                 TabView(selection: $currentID) {
@@ -213,7 +223,9 @@ struct PhotoViewer: View {
                       resumeTime = time
                       store.setPlayback(time, for: asset.id)
                   },
-                  onPlaybackChange: { videoPlaying = $0 })
+                  onPlaybackChange: { videoPlaying = $0 },
+                  mode: store.playbackMode,
+                  onModeChange: { store.playbackMode = $0 })
     }
 
     private func refreshIdleTimer() {

@@ -176,6 +176,11 @@ final class LibraryStore {
         set { library.appearance = newValue; scheduleSave() }
     }
 
+    var playbackMode: PlaybackMode {
+        get { library.playbackMode }
+        set { library.playbackMode = newValue; scheduleSave() }
+    }
+
     var totalPhotoCount: Int { library.groups.reduce(0) { $0 + $1.photoCount } }
     var totalImageCount: Int { library.groups.reduce(0) { $0 + $1.imageCount } }
     var totalVideoCount: Int { library.groups.reduce(0) { $0 + $1.videoCount } }
