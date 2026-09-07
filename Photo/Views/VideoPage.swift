@@ -224,6 +224,8 @@ struct VideoPage: View {
     var announceResume = false
     /// 视图要走了，把当前进度交出去
     var onLeave: ((Double) -> Void)?
+    /// 在播 / 没在播。外面拿它决定要不要拦着屏幕自动锁。
+    var onPlaybackChange: ((Bool) -> Void)?
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -343,6 +345,12 @@ struct VideoPage: View {
         .ignoresSafeArea()
         .onChange(of: isCurrent, initial: true) { _, current in
             if current { start() } else { stop() }
+        }
+        // 只有当前这一页才报。TabView 会把相邻的页面先建出来，
+        // 那些页面一出生就报一次「没在播」，会把正在播的这一页的状态盖掉。
+        .onChange(of: isPlaying, initial: true) { _, playing in
+            guard isCurrent else { return }
+            onPlaybackChange?(playing)
         }
         // 退到后台之后可能就再也回不来了——人上划一抹 App 就没了，
         // onDisappear 不会走。所以趁这一下先把进度交出去，播放本身不动，
@@ -721,6 +729,18 @@ struct VideoPage: View {
         made.play()
         made.rate = rate
         isPlaying = true
+    }
+
+    /// 退出预览时把音频会话让出去。
+    ///
+    /// 单个视频停下来时故意不做这件事——翻到下一个还要用，一开一关扬声器
+    /// 会「啵」一声。但整个预览页关掉之后就该还回去了：`.playback` 这个
+    /// 类别是排他的，一直占着，音响链路醒着耗电，更要紧的是你原来在听的
+    /// 音乐、播客会一直哑着，直到你把整个 App 切走才恢复。
+    ///
+    /// notifyOthersOnDeactivation 就是那句「我用完了，你继续」。
+    static func releaseAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func stop() {

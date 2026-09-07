@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct PhotoViewer: View {
 
@@ -17,6 +18,8 @@ struct PhotoViewer: View {
     @State private var currentID: UUID?
     @State private var showChrome = true
     @State private var isPlaying = false
+    /// 当前这一页的视频在不在播。屏幕自动锁要拦着它。
+    @State private var videoPlaying = false
     /// 横竖屏切换会把播放页整个重建，用这两个把进度接上
     @State private var resumeAsset: UUID?
     @State private var resumeTime: Double = 0
@@ -123,13 +126,19 @@ struct PhotoViewer: View {
                 advance()
             }
         }
-        .onChange(of: isPlaying) { _, playing in
-            // WiFi 传输也会占用这个开关，关掉时要考虑它还开着的情况
-            UIApplication.shared.isIdleTimerDisabled = playing || wifi.isRunning
-        }
+        // 三个都要拦着屏幕自动锁：幻灯片、正在播的视频、WiFi 传输。
+        //
+        // 原来漏了视频——看一部长片，手不碰屏幕，到了系统的自动锁时间
+        // 屏幕就暗下去了。这是个开关不是计数器，所以三个来源要合到一处算，
+        // 谁也不能自己关掉它。
+        .onChange(of: isPlaying) { _, _ in refreshIdleTimer() }
+        .onChange(of: videoPlaying) { _, _ in refreshIdleTimer() }
         .onDisappear {
             isPlaying = false
+            videoPlaying = false
             UIApplication.shared.isIdleTimerDisabled = wifi.isRunning
+            // 音频会话还给系统，不然你原来听的音乐会一直哑着
+            VideoPage.releaseAudioSession()
             // 退出预览时把方向掰回竖屏，别把整个 App 留在横屏上
             ScreenOrientation.request(landscape: false)
         }
@@ -199,11 +208,16 @@ struct PhotoViewer: View {
                   // 存进索引的位置——那才是「上次看到哪儿了」。
                   startAt: resumeAsset == asset.id ? resumeTime : asset.resumeAt,
                   announceResume: resumeAsset != asset.id && asset.resumeAt > 0,
+                  onPlaybackChange: { videoPlaying = $0 },
                   onLeave: { time in
                       resumeAsset = asset.id
                       resumeTime = time
                       store.setPlayback(time, for: asset.id)
                   })
+    }
+
+    private func refreshIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = isPlaying || videoPlaying || wifi.isRunning
     }
 
     /// 相邻的那一个。到头了返回 nil，播放器把按钮置灰。

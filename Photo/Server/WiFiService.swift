@@ -19,6 +19,11 @@ final class WiFiService {
     private(set) var lastEvent: String?
 
     private let server = HTTPServer()
+    /// 上一次有人来访的时间。空闲自动停服要用。
+    private var lastActivity = Date()
+    private var idleWatch: Task<Void, Never>?
+    /// 没人来这么久就自己关掉。见 watchIdle。
+    private static let idleLimit: TimeInterval = 20 * 60
     private let store: LibraryStore
 
     init(store: LibraryStore) {
@@ -54,16 +59,51 @@ final class WiFiService {
                 return await self.route(request)
             }
             status = .running(url: "http://\(ip):\(port)")
+            // 服务只能在前台活着——App 一被挂起 NWListener 就没了，所以传输
+            // 期间必须拦着屏幕自动锁。代价是这段时间屏幕一直亮着，很费电，
+            // 所以下面盯着，没人用就自己关掉。
             UIApplication.shared.isIdleTimerDisabled = true
+            lastActivity = Date()
+            watchIdle()
         } catch {
             status = .failed(error.localizedDescription)
         }
     }
 
     func stop() {
+        idleWatch?.cancel()
+        idleWatch = nil
         server.stop()
         status = .stopped
         UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    /// 没人用就把服务关掉。
+    ///
+    /// 开着传输的这段时间屏幕是被强制点亮的，这是整个 App 里最费电的状态——
+    /// 传完了忘记关，一晚上就能把电耗光。所以盯一下：二十分钟没人来访就自己收。
+    ///
+    /// 两个条件都要满足才算「没人用」：
+    ///
+    /// - 二十分钟没有请求进来。网页那边每 10 秒会拉一次列表，所以只要还有人
+    ///   开着页面，这个条件就不成立。
+    /// - 手上没有连着的客户端。正在传一个 8GB 的片子时连接是在的，但那一个
+    ///   请求要跑很久才完成——只看「最后一次请求什么时候」会把它掐断。
+    ///
+    /// 一分钟醒一次。这个频率本身的开销可以忽略，比屏幕多亮一分钟便宜得多。
+    private func watchIdle() {
+        idleWatch?.cancel()
+        idleWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self, self.isRunning else { return }
+                guard !self.server.hasActiveConnections,
+                      Date().timeIntervalSince(self.lastActivity) > Self.idleLimit else { continue }
+                self.stop()
+                self.lastEvent = "闲置太久，已自动关闭传输"
+                return
+            }
+        }
     }
 
     // MARK: 路由
@@ -104,6 +144,7 @@ final class WiFiService {
     private func lookupAsset(_ id: UUID) -> Asset? { store.asset(id) }
 
     private func handle(_ request: HTTPRequest) async -> HTTPResponse {
+        lastActivity = Date()
         switch (request.method, request.path) {
 
         case ("GET", "/"), ("GET", "/index.html"):
