@@ -297,9 +297,8 @@ final class LibraryStore {
         let taken = Set(library.groups.enumerated().compactMap { $0.offset == i ? nil : $0.element.dirName })
         let newDir = MediaLayout.unique(MediaLayout.sanitize(trimmed), taken: taken)
         let oldDir = library.groups[i].dirName
-        if newDir != oldDir {
+        if newDir != oldDir, relocate(from: oldDir, to: newDir) {
             library.groups[i].dirName = newDir
-            relocate(from: oldDir, to: newDir)
         }
         scheduleSave()
     }
@@ -375,10 +374,14 @@ final class LibraryStore {
             ($0.offset == fi || $0.element.parentID != parent) ? nil : $0.element.dirName
         })
         let newDir = MediaLayout.unique(MediaLayout.sanitize(trimmed), taken: taken)
-        if newDir != library.groups[gi].folders[fi].dirName {
+        let oldDir = library.groups[gi].folders[fi].dirName
+        if newDir != oldDir {
+            // 先把新名字落下去才能算出新路径，搬不动再改回来——
+            // 记录指着一个不存在的目录，比名字没改过来难受得多
             library.groups[gi].folders[fi].dirName = newDir
-            if let oldPath, let newPath = dirPath(ofFolder: id) {
-                relocate(from: oldPath, to: newPath)
+            if let oldPath, let newPath = dirPath(ofFolder: id),
+               !relocate(from: oldPath, to: newPath) {
+                library.groups[gi].folders[fi].dirName = oldDir
             }
         }
         scheduleSave()
@@ -632,15 +635,24 @@ final class LibraryStore {
     /// 目录换了位置：磁盘上搬一次，再把这棵子树里所有资产记录的路径前缀改掉。
     ///
     /// 搬目录是一次 rename，不管里面有几千个文件都是瞬间的；逐个搬文件才慢。
-    private func relocate(from old: String, to new: String) {
-        guard !old.isEmpty, !new.isEmpty, old != new else { return }
+    /// 返回是否真的搬成了。
+    ///
+    /// 搬不动的时候一定不能改记录：新名字是拿索引里的名字避重算出来的，
+    /// 但磁盘上可能躺着一个没进索引的同名目录——那时 moveItem 会失败，
+    /// 而记录如果已经改了，整组照片就都指着一个不存在的目录，
+    /// 界面上是一片灰。宁可名字没改过来。
+    @discardableResult
+    private func relocate(from old: String, to new: String) -> Bool {
+        guard !old.isEmpty, !new.isEmpty, old != new else { return false }
 
         let src = Paths.media.appendingPathComponent(old)
         let dst = Paths.media.appendingPathComponent(new)
         if FileManager.default.fileExists(atPath: src.path) {
+            guard !FileManager.default.fileExists(atPath: dst.path) else { return false }
             try? FileManager.default.createDirectory(at: dst.deletingLastPathComponent(),
                                                      withIntermediateDirectories: true)
-            try? FileManager.default.moveItem(at: src, to: dst)
+            do { try FileManager.default.moveItem(at: src, to: dst) }
+            catch { return false }
         }
 
         let oldPrefix = old + "/", newPrefix = new + "/"
@@ -654,6 +666,10 @@ final class LibraryStore {
                 }
             }
         }
+        // 目录变了，记着的那些占用名不作数了
+        claimedNames.removeValue(forKey: old)
+        claimedNames.removeValue(forKey: new)
+        return true
     }
 
     /// 每个目录里已经占掉的文件名。
