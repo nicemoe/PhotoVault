@@ -137,6 +137,16 @@ final class LibraryStore {
         Task.detached(priority: .utility) { await Self.write(snapshot) }
     }
 
+    /// 服务端逐个收文件时用。
+    ///
+    /// 和 saveNow 的区别只在要不要合并。网页那边挑一整个相册上传，是几千个
+    /// 请求挨着来，每来一个就整份索引写一遍的话，写入量是文件数的平方——
+    /// 一万个文件累计约 13 GB。合并之后连着来的并成一次。
+    ///
+    /// 掉最后 400ms 的记录不要紧：文件已经落在 Media 里，下次启动对账会把
+    /// 它收回来。索引不是唯一的真相，磁盘才是。
+    func scheduleSaveFromServer() { scheduleSave() }
+
     private nonisolated static func write(_ snapshot: Library) async {
         guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
         try? data.write(to: Paths.libraryFile, options: .atomic)

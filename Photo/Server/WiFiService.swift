@@ -218,7 +218,14 @@ final class WiFiService {
             if ok {
                 receivedCount += 1
                 note("收到「\((rawName as NSString).lastPathComponent)」")
-                store.saveNow()
+                // 这条路是一个文件一个请求，网页那边挑一整个相册就是几千个请求
+                // 挨着来。每来一个就整份索引写一遍的话，写入量是文件数的平方：
+                // 一万个文件累计写盘约 13 GB。交给 400ms 的合并队列，
+                // 连着来的那些会并成一次。
+                //
+                // 掉最后 400ms 的记录不要紧：文件已经落在 Media 里了，
+                // 下次启动对账会把它收回来——磁盘才是真相，索引丢了能重建。
+                store.scheduleSaveFromServer()
             }
             return .ok(["saved": ok ? 1 : 0, "skipped": ok ? 0 : 1])
 
