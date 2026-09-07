@@ -270,8 +270,16 @@ final class ThumbnailCache: @unchecked Sendable {
         let made = Self.compose(tiles, side: side, gap: gap, scale: scale)
         let cost = Int(side * side * scale * scale * 4)
         cache.setObject(made, forKey: key as NSString, cost: cost)
-        // 目录封面不跟着某一个 asset 走，invalidate 那套按 id 索引的表就不登记了。
-        // 它会随着缓存自己的淘汰规则走，而且键里带着 id，换了人自然作废。
+
+        // 登记到参与的每一张名下。
+        //
+        // 删掉封面里的某个视频之后，界面本来就会自己纠正——封面换人了，
+        // 键跟着变，重拼一张。但旧那张位图是拿不到也删不掉的死数据，
+        // 只能等缓存自己淘汰。登记之后，删这个视频时 invalidate 会顺手
+        // 把它带走。一张拼贴挂在四个 id 下面，谁没了都算数。
+        lock.lock()
+        for asset in picked { keysByAsset[asset.id, default: []].insert(key) }
+        lock.unlock()
         return made
     }
 
