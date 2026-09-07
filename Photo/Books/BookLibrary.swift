@@ -885,10 +885,16 @@ final class BookLibrary {
             $0.offset == i ? nil : ($0.element.sourceName as NSString).deletingPathExtension
         })
         let name = FileNames.unique(FileNames.sanitize(trimmed), taken: taken) + ".txt"
-        if name != old {
-            try? FileManager.default.moveItem(at: BookPaths.file(named: old),
-                                              to: BookPaths.file(named: name))
-            books[i].sourceName = name
+        // 搬不动就别改记录。新名字是拿索引里的书名避重算出来的，但书库里
+        // 可能躺着一个还没收进来的同名 txt——那时改名会失败，而记录如果
+        // 已经改了，这本书就指着一个不存在的文件，点开是空白，
+        // 下次对账还会把它当成「原文件被删了」清掉。宁可书名和文件名对不上。
+        let target = BookPaths.file(named: name)
+        if name != old, !FileManager.default.fileExists(atPath: target.path) {
+            do {
+                try FileManager.default.moveItem(at: BookPaths.file(named: old), to: target)
+                books[i].sourceName = name
+            } catch {}
         }
         scheduleSave()
     }
