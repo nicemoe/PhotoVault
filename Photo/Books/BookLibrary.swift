@@ -4,9 +4,9 @@ import Observation
 /// 书在磁盘上怎么摆。
 ///
 ///     Documents/
-///       书库/                      ← 原文件。丢书进这里，导出也从这里拿
+///       Local/                     ← 原文件。丢书进这里，导出也从这里拿
 ///         斗破苍穹.txt
-///       章节/                      ← 拆好的，App 读这里
+///       Books/                     ← 拆好的，App 读这里
 ///         斗破苍穹/0001 第一章 风起.txt
 ///       books.json
 ///
@@ -14,25 +14,25 @@ import Observation
 /// 章节文件坏了也能重建。代价是占用翻倍，一本三兆的长篇变成六兆。
 ///
 /// 「哪些书是新的」也因此变成一件确定的事：拿索引里的 sourceName 和
-/// 书库里的文件对一遍，多出来的就是新拖进来的。
+/// Local 里的文件对一遍，多出来的就是新拖进来的。
 enum BookPaths {
 
     /// 原文件
     static let library: URL = {
-        let url = Paths.documents.appendingPathComponent("书库", isDirectory: true)
+        let url = Paths.documents.appendingPathComponent("Local", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
         // 放一份说明。用 .md，不在收书的后缀里，不会把自己当成一本书导进去。
         let readme = url.appendingPathComponent("使用说明.md")
         if !FileManager.default.fileExists(atPath: readme.path) {
             let text = """
-            # 书库
+            # Local —— 原文件
 
             把 TXT 或 EPUB 丢进这个文件夹，回到 App 就会自动收进书架。
             整个文件夹丢进来也行，里面的书会被翻出来。
 
             **原文件会一直留在这儿**，随时可以拷回电脑。App 读的是隔壁
-            「章节」文件夹里拆好的那份，那份是从这里生成的。
+            Books 文件夹里拆好的那份，那份是从这里生成的。
             """
             try? Data(text.utf8).write(to: readme, options: .atomic)
         }
@@ -41,7 +41,7 @@ enum BookPaths {
 
     /// 拆好的章节
     static let chapters: URL = {
-        let url = Paths.documents.appendingPathComponent("章节", isDirectory: true)
+        let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -66,29 +66,16 @@ enum BookPaths {
         directory(named: dirName).appendingPathComponent(chapterName(index: index, title: title))
     }
 
-    /// 老版本把索引和章节都塞在 Books/ 下面。整个目录改个名就完事，
-    /// 两次 rename，不动里面的文件，放在启动路径上也不怕。
+    /// 老版本把索引也塞在 Books/ 里。章节本来就在 Books/，不用动，
+    /// 只把索引挪到 Documents 根下——一次 rename，放在启动路径上也不怕。
     static func migrateLayout() {
         let fm = FileManager.default
-        let old = Paths.documents.appendingPathComponent("Books", isDirectory: true)
-        guard fm.fileExists(atPath: old.path) else { return }
-
-        let oldIndex = old.appendingPathComponent("books.json")
-        if fm.fileExists(atPath: oldIndex.path), !fm.fileExists(atPath: indexFile.path) {
-            try? fm.moveItem(at: oldIndex, to: indexFile)
-        }
-        // 章节目录是 lazy 建的，这时候可能还没建；没建就直接改名，建了就搬内容
-        if fm.fileExists(atPath: Paths.documents.appendingPathComponent("章节").path) {
-            if let items = try? fm.contentsOfDirectory(at: old, includingPropertiesForKeys: nil) {
-                for item in items {
-                    try? fm.moveItem(at: item,
-                                     to: chapters.appendingPathComponent(item.lastPathComponent))
-                }
-            }
-            try? fm.removeItem(at: old)
-        } else {
-            try? fm.moveItem(at: old, to: Paths.documents.appendingPathComponent("章节"))
-        }
+        let oldIndex = Paths.documents
+            .appendingPathComponent("Books", isDirectory: true)
+            .appendingPathComponent("books.json")
+        guard fm.fileExists(atPath: oldIndex.path),
+              !fm.fileExists(atPath: indexFile.path) else { return }
+        try? fm.moveItem(at: oldIndex, to: indexFile)
     }
 }
 
@@ -317,7 +304,7 @@ final class BookLibrary {
             return (metas, total)
         }.value
 
-        // 原文件留一份在书库里：能原样导出，分章逻辑以后改进了还能拿它重拆
+        // 原文件留一份在 Local 里：能原样导出，分章逻辑以后改进了还能拿它重拆
         let sourceName = await Task.detached(priority: .utility) {
             Self.keepSource(url)
         }.value
@@ -361,10 +348,10 @@ final class BookLibrary {
     /// 留着只会让人以为还没导，下次进前台又导一遍。
     /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
     @discardableResult
-    /// 收「书库」里还没收过的书。
+    /// 收 Local 里还没收过的书。
     ///
     /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的原文件叫什么
-    /// （sourceName），书库里对不上号的就是新拖进来的。不用比文件数——
+    /// （sourceName），Local 里对不上号的就是新拖进来的。不用比文件数——
     /// 比数不可靠，删一个加一个数字还一样。
     func importLooseFiles() async -> Int {
         let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
@@ -380,7 +367,7 @@ final class BookLibrary {
         return saved
     }
 
-    /// 书库里所有能收的文件，返回相对书库的路径。
+    /// Local 里所有能收的文件，返回相对 Local 的路径。
     /// 子目录也翻——拖一整个文件夹进来是常事，而且保留人家的分类。
     nonisolated private static func scanLibrary() -> [String] {
         let fm = FileManager.default
@@ -399,7 +386,7 @@ final class BookLibrary {
         return out
     }
 
-    /// 原文件在书库里叫什么。已经在书库里的就地不动，外面来的（网页上传、
+    /// 原文件在 Local 里叫什么。已经在里面的就地不动，外面来的（网页上传、
     /// 从「文件」选的）拷一份进来，重名加序号。
     nonisolated private static func keepSource(_ url: URL) -> String {
         let fm = FileManager.default
@@ -548,7 +535,7 @@ final class BookLibrary {
         if !removed.dirName.isEmpty {
             try? FileManager.default.removeItem(at: BookPaths.directory(named: removed.dirName))
         }
-        // 原文件也一起删。留着的话下次扫书库又会把它收回来。
+        // 原文件也一起删。留着的话下次扫 Local 又会把它收回来。
         if !removed.sourceName.isEmpty {
             try? FileManager.default.removeItem(
                 at: BookPaths.library.appendingPathComponent(removed.sourceName))
