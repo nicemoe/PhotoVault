@@ -85,6 +85,14 @@ struct ReaderView: View {
         .onChange(of: book == nil) { _, gone in
             if gone { dismiss() }
         }
+        // 正文在电脑上被改过、书重拆了，手里这份章节表就作废了。
+        //
+        // 章节表是打开书那一刻取的一份拷贝，之后不会自己更新。而对账是
+        // 在书架上跑的，切回前台时即使人正在阅读页里也照跑不误——不重新取
+        // 的话，偏移全指着旧的排布，翻页读出来是上一章的半句话。
+        .onChange(of: book?.textBytes) { _, _ in
+            Task { chapters = await library.chapters(of: bookID) }
+        }
         .onChange(of: locator) { _, _ in saveProgress() }
         .onChange(of: settings.mode) { _, mode in
             if mode == .scroll {

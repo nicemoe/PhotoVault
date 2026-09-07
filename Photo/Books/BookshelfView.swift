@@ -226,7 +226,7 @@ struct BookshelfView: View {
     /// 在电脑上改过的重新拆一遍
     private func collectLooseFiles() async {
         let saved = await library.importLooseFiles()
-        let gone = library.pruneMissingSources()
+        let gone = await library.pruneMissingSources()
         let redone = await library.refreshEdited()
         // 兜底：清掉认不出主人的章节表。删书时本来就会一并删，这里管的是
         // 漏网的那些——索引被删过之后重收，旧 id 那批就没人认领了。

@@ -635,10 +635,15 @@ final class BookLibrary {
     /// sourceName 是空串的跳过：那种书压根没记文件是哪个，
     /// 无从判断在不在，不能拿「找不到」当「被删了」。
     @discardableResult
-    func pruneMissingSources() -> Int {
+    func pruneMissingSources() async -> Int {
+        // 扫盘甩到后台。一千本书走一遍目录树要点时间，压在主线程上
+        // 每次切回前台都要顿一下。
+        //
         // 扫不动就什么都别删。返回 nil 是「这次没看清」，不是「目录是空的」——
         // 把这两种当成一回事的话，一次扫描失败就能把整个书架清光。
-        guard let names = Self.scanLibrary() else { return 0 }
+        guard let names = await Task.detached(priority: .utility, operation: {
+            Self.scanLibrary()
+        }).value else { return 0 }
         let onDisk = Set(names.map { $0.lowercased() })
         let doomed = books.filter { !$0.sourceName.isEmpty
             && !onDisk.contains($0.sourceName.lowercased()) }
