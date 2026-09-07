@@ -168,7 +168,9 @@ struct BookshelfView: View {
             Text(errorMessage ?? "")
         }
         .overlay {
-            if let title = library.importingTitle {
+            if let progress = library.migrating {
+                MigratingOverlay(progress: progress)
+            } else if let title = library.importingTitle {
                 ImportingOverlay(title: title)
             }
         }
@@ -176,7 +178,12 @@ struct BookshelfView: View {
         // 电脑上把书拖进「导入」文件夹后，回到 App 就收走。
         // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
         // 常驻监听目录只会白耗电。
-        .task { await collectInbox() }
+        .task {
+            // 先把老布局搬完再收「导入」文件夹：两件事都在动 Books 目录，
+            // 撞一起容易出岔子
+            await library.migrateIfNeeded()
+            await collectInbox()
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await collectInbox() }
@@ -404,6 +411,34 @@ struct BookRow: View {
 }
 
 // MARK: - 导入中
+
+/// 老布局搬新布局时的进度。
+///
+/// 这一步以前放在启动路径上，一千本书要改几十万次文件名，
+/// 系统的看门狗只给 20 秒，必然被掐掉（0x8BADF00D），而且因为进度没存，
+/// 下次启动重头再来、崩在同一处。现在挪到书架出来之后的后台任务里。
+struct MigratingOverlay: View {
+    let progress: BookLibrary.MigrationProgress
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.25).ignoresSafeArea()
+            VStack(spacing: 14) {
+                ProgressView(value: Double(progress.done), total: Double(max(1, progress.total)))
+                    .tint(Theme.accent)
+                    .frame(width: 180)
+                Text("正在整理书库 \(progress.done) / \(progress.total)")
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundStyle(Theme.secondaryLabel)
+                Text("把书按书名和章节名重新摆一遍，只做这一次")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryLabel.opacity(0.7))
+            }
+            .padding(28)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+}
 
 struct ImportingOverlay: View {
     let title: String

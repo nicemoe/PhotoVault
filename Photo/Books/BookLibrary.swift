@@ -124,44 +124,98 @@ final class BookLibrary {
         shelfLayout = index.shelfLayout
         appearance = index.appearance
         repairTitles()
-        migrateToNamedLayout()
     }
+
+    struct MigrationProgress {
+        var done: Int
+        var total: Int
+    }
+
+    /// 正在把老布局搬成新布局，nil 表示没有在搬
+    private(set) var migrating: MigrationProgress?
 
     /// 老版本把书存成 `Books/<书的 UUID>/0.txt`——目录是一串 UUID、章节是
     /// 纯数字。开了文件共享之后从访达打开看到的就是这个，哪本书哪一章都
     /// 看不出来。这里把已经进来的书搬成 `Books/<书名>/0001 第一章 ….txt`。
     ///
-    /// 只会跑一次：搬完 dirName 就有值了，下次启动直接跳过。
-    private func migrateToNamedLayout() {
-        var changed = false
+    /// 三件事必须这么办，否则一千本书的库会一开就崩：
+    ///
+    /// 一、不能放在 load() 里。load() 是 init() 调的，跑在启动路径上，
+    /// 几十万次改名摆在那儿必然被系统的看门狗掐掉，而且每次启动崩在同一处。
+    /// 现在是书架出来之后的后台任务。
+    ///
+    /// 二、文件操作全在后台线程，主线程只更新进度。
+    ///
+    /// 三、攒一批存一次索引。索引整本写一次很贵（几十万个章节条目），
+    /// 每本存一次会把时间全花在写 json 上；中途被杀最多重做这一批，
+    /// relayout 本身可以重跑。
+    func migrateIfNeeded() async {
+        let pending = books.indices.filter { books[$0].dirName.isEmpty }
+        guard !pending.isEmpty else { return }
+
+        migrating = MigrationProgress(done: 0, total: pending.count)
+        defer { migrating = nil }
+
+        var sinceSave = 0
+        for (n, i) in pending.enumerated() {
+            guard i < books.count else { break }
+            let book = books[i]
+            let claimed = Set(books.enumerated().compactMap {
+                $0.offset == i ? nil : $0.element.dirName.lowercased()
+            })
+
+            let dirName = await Task.detached(priority: .utility) {
+                Self.relayout(book: book, claimed: claimed)
+            }.value
+
+            // 期间书可能被删了或者顺序变了，认一下 id 再写回去
+            if i < books.count, books[i].id == book.id {
+                books[i].dirName = dirName
+                sinceSave += 1
+            }
+            migrating = MigrationProgress(done: n + 1, total: pending.count)
+
+            if sinceSave >= 20 {
+                saveNow()
+                sinceSave = 0
+            }
+        }
+        saveNow()
+    }
+
+    /// 搬一本书，返回它最终的目录名。可以重跑。
+    nonisolated private static func relayout(book: Book, claimed: Set<String>) -> String {
         let fm = FileManager.default
+        let base = FileNames.sanitize(book.title)
+        // 名字被别的书占了就带上 id 的前八位。这样同一本书每次算出来都一样，
+        // 上次搬完没来得及存索引，这次还能认回同一个目录。
+        let name = claimed.contains(base.lowercased())
+            ? base + " [" + String(book.id.uuidString.prefix(8)) + "]"
+            : base
 
-        for i in books.indices where books[i].dirName.isEmpty {
-            let taken = Set(books.enumerated().compactMap { $0.offset == i ? nil : $0.element.dirName })
-            let dirName = FileNames.unique(FileNames.sanitize(books[i].title), taken: taken)
+        let old = BookPaths.root.appendingPathComponent(book.id.uuidString, isDirectory: true)
+        let new = BookPaths.directory(named: name)
 
-            let old = BookPaths.root.appendingPathComponent(books[i].id.uuidString, isDirectory: true)
-            let new = BookPaths.directory(named: dirName)
-
-            // 先把目录改名，再逐章把 0.txt 改成 0001 第一章 ….txt。
-            // 目录不在（数据坏了或者手动删过）也要把 dirName 补上，
-            // 否则每次启动都会重来一遍。
-            if fm.fileExists(atPath: old.path) {
-                try? fm.moveItem(at: old, to: new)
-            }
-            for chapter in books[i].chapters {
-                let from = new.appendingPathComponent("\(chapter.index).txt")
-                guard fm.fileExists(atPath: from.path) else { continue }
-                let to = new.appendingPathComponent(
-                    BookPaths.chapterName(index: chapter.index, title: chapter.title))
-                if from != to { try? fm.moveItem(at: from, to: to) }
-            }
-
-            books[i].dirName = dirName
-            changed = true
+        let dir: URL
+        if fm.fileExists(atPath: old.path) {
+            dir = old
+        } else if fm.fileExists(atPath: new.path) {
+            dir = new            // 上次搬完了但没存下索引，接着把章节名收尾
+        } else {
+            return name          // 文件本来就没了，名字照样补上，免得每次启动重来
         }
 
-        if changed { saveNow() }
+        // 先改章节名，最后才改目录名。反过来的话中途崩了，
+        // 光看目录在哪儿分不清章节改到第几个。
+        for chapter in book.chapters {
+            let from = dir.appendingPathComponent("\(chapter.index).txt")
+            guard fm.fileExists(atPath: from.path) else { continue }
+            let to = dir.appendingPathComponent(
+                BookPaths.chapterName(index: chapter.index, title: chapter.title))
+            if from != to { try? fm.moveItem(at: from, to: to) }
+        }
+        if dir == old { try? fm.moveItem(at: old, to: new) }
+        return name
     }
 
     /// 把已经存坏的书名修回来。
