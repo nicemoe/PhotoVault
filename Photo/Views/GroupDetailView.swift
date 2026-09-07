@@ -47,12 +47,16 @@ struct GroupDetailView: View {
                         }
                         .padding(.top, 20)
                     } else {
+                        // 整组的汇总一次算完再分发。放在这一层而不是每张卡片
+                        // 自己去问：那样每张卡都要重走一遍子树，是平方级的。
+                        let summaries = group.folderSummaries()
                         LazyVGrid(columns: layout.columns, spacing: 16) {
                             ForEach(group.rootFolders.sorted(by: store.folderSort)) { folder in
                                 Button {
                                     path.append(.folder(folder.id))
                                 } label: {
                                     FolderCard(folder: folder,
+                                               summary: summaries[folder.id] ?? .init(),
                                                side: layout.side,
                                                tint: Theme.color(at: group.colorIndex))
                                 }

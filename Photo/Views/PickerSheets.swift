@@ -259,7 +259,11 @@ struct ReorderFoldersSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        // 整组一次算完。每行各问一次 totalPhotoCount 的话，每次都要重走一遍
+        // 子树，目录一多就是平方级——排序表这种可以拖来拖去的界面尤其吃亏，
+        // 每拖一下整个列表都要重算。
+        let summaries = store.group(groupID)?.folderSummaries() ?? [:]
+        return NavigationStack {
             VStack(spacing: 0) {
                 hint(parentID == nil ? "拖动调整目录在该分组内的顺序" : "拖动调整子目录的顺序")
 
@@ -272,7 +276,7 @@ struct ReorderFoldersSheet: View {
                             Text(folder.name)
                                 .font(.system(size: 15.5, weight: .semibold))
                             Spacer()
-                            Text("\(store.totalPhotoCount(in: folder.id)) 张")
+                            Text("\(summaries[folder.id]?.photos ?? 0) 张")
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.secondaryLabel)
                         }

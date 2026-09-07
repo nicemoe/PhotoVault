@@ -286,12 +286,16 @@ struct FolderDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("子目录", count: children.count)
 
+            // 同 GroupDetailView：整组的汇总一次算完再分发给每张卡片
+            let summaries = store.folderSummaries(inGroupOf: folderID)
             LazyVGrid(columns: folderLayout.columns, spacing: 16) {
                 ForEach(children) { sub in
                     Button {
                         path.append(.folder(sub.id))
                     } label: {
-                        FolderCard(folder: sub, side: folderLayout.side, tint: tint)
+                        FolderCard(folder: sub,
+                                   summary: summaries[sub.id] ?? .init(),
+                                   side: folderLayout.side, tint: tint)
                     }
                     .buttonStyle(PressableCardStyle())
                     .imageDropTarget(folderID: sub.id) { saved in

@@ -191,8 +191,28 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
 
     /// 跨目录取最近的 4 张做封面拼贴
     var coverAssets: [Asset] {
-        let all = folders.flatMap(\.assets).sorted { $0.createdAt > $1.createdAt }
-        return Array(all.prefix(4))
+        Self.newest(4, in: folders.lazy.flatMap(\.assets))
+    }
+
+    /// 取最近的 n 个，不把整个集合排一遍。
+    ///
+    /// 原来是 flatMap 成一个新数组、整个排序、再取前四个。一个五千张照片的
+    /// 分组，画一次封面就要拷五千个结构体再排一遍序，只为拿四张出来——
+    /// 而首页上每个分组卡片都要来这么一次，每次刷新都重算。
+    ///
+    /// 换成边走边留前 n 名。n 是 4，所以里面那个 firstIndex 最多比四次；
+    /// 绝大多数元素在第一个 if 就被挡掉了，一次比较都不用。
+    static func newest(_ n: Int, in assets: some Sequence<Asset>) -> [Asset] {
+        guard n > 0 else { return [] }
+        var best: [Asset] = []
+        best.reserveCapacity(n + 1)
+        for a in assets {
+            if best.count == n, a.createdAt <= best[n - 1].createdAt { continue }
+            let at = best.firstIndex { a.createdAt > $0.createdAt } ?? best.count
+            best.insert(a, at: at)
+            if best.count > n { best.removeLast() }
+        }
+        return best
     }
 }
 
@@ -232,6 +252,72 @@ extension PhotoGroup {
     func coverAssets(for folderID: UUID) -> [Asset] {
         let all = subtree(of: folderID).flatMap(\.assets).sorted { $0.createdAt > $1.createdAt }
         return Array(all.prefix(4))
+    }
+
+    /// 一个目录的汇总：含子目录在内的照片数、子目录数、封面前四张。
+    struct FolderSummary {
+        var photos = 0
+        var subfolders = 0
+        var covers: [Asset] = []
+    }
+
+    /// 一次把整组每个目录的汇总都算出来。
+    ///
+    /// 原来是每张目录卡片各算各的，而且一张卡要算三样：totalPhotoCount、
+    /// totalFolderCount、coverAssets。每样都从 subtree 重新走一遍子树，
+    /// 而 subtree 自己是 O(目录数²)——它在遍历里对整个 folders 数组做 filter。
+    /// coverAssets 还要把子树里所有照片 flatMap 成新数组再整个排序，
+    /// 只为取前四张。一个五十个目录、五千张照片的分组，画一屏就是几十万次
+    /// 结构体拷贝加上几十次全量排序，划一下就卡。
+    ///
+    /// 换成自底向上走一遍：先按 parentID 建索引，再从叶子往上累加。
+    /// 整组一次 O(目录数 + 照片数)，视图算一次传给所有卡片。
+    ///
+    /// 封面能这样往上并，是因为子树里最新的四张一定在「自己最新的四张」和
+    /// 「每个子目录最新的四张」这些候选里——不可能有第五名混进最终的前四。
+    func folderSummaries() -> [UUID: FolderSummary] {
+        var byID: [UUID: Folder] = [:]
+        var children: [UUID: [UUID]] = [:]
+        byID.reserveCapacity(folders.count)
+        for f in folders {
+            byID[f.id] = f
+            if let parent = f.parentID { children[parent, default: []].append(f.id) }
+        }
+
+        var out: [UUID: FolderSummary] = [:]
+        out.reserveCapacity(folders.count)
+        var visited = Set<UUID>()
+
+        // 迭代式后序遍历：先把子目录算完，再回来算自己。
+        //
+        // 不用递归——目录层级是人随便建的，深一点就有撑爆栈的风险。
+        // visited 顺带把环挡住了：数据万一坏成环，这里只是算得不准，
+        // 而原来那个 subtree 碰上环会一直转下去，界面直接死住。
+        for root in folders.map(\.id) where !visited.contains(root) {
+            var stack: [(id: UUID, done: Bool)] = [(root, false)]
+            while let top = stack.popLast() {
+                guard top.done else {
+                    guard visited.insert(top.id).inserted else { continue }
+                    stack.append((top.id, true))
+                    for child in children[top.id] ?? [] where !visited.contains(child) {
+                        stack.append((child, false))
+                    }
+                    continue
+                }
+                guard let folder = byID[top.id] else { continue }
+                var summary = FolderSummary(photos: folder.assets.count,
+                                            subfolders: 0,
+                                            covers: Self.newest(4, in: folder.assets))
+                for child in children[top.id] ?? [] {
+                    guard let sub = out[child] else { continue }
+                    summary.photos += sub.photos
+                    summary.subfolders += sub.subfolders + 1
+                    summary.covers = Self.newest(4, in: summary.covers + sub.covers)
+                }
+                out[top.id] = summary
+            }
+        }
+        return out
     }
 
     /// 从分组根到该目录的一串目录，做面包屑用
