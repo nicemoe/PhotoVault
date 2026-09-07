@@ -142,6 +142,13 @@ final class HTTPServer: @unchecked Sendable {
         onStateChange?(false)
     }
 
+    /// 手上还有没有连着的客户端。
+    /// 空闲自动停服要用：正在传一个大文件的时候，连接是在的但请求还没完成。
+    var hasActiveConnections: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !connections.isEmpty
+    }
+
     private func add(_ c: HTTPConnection) {
         lock.lock(); connections[ObjectIdentifier(c)] = c; lock.unlock()
     }
