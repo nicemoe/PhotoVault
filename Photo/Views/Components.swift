@@ -225,14 +225,19 @@ struct GroupCard: View {
                 .frame(height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topLeading) {
-                    // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块
+                    // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块。
+                    //
+                    // 衬底原来是 .ultraThinMaterial。那是一层实时毛玻璃——要把
+                    // 背后的内容采样下来现场模糊，每帧都做。一屏六到九张卡片
+                    // 就是六到九次模糊，而这是首页独有的开销，目录卡片没有。
+                    // 二十点的小圆片，模糊和纯色差别肉眼分不出，代价却差很远。
                     Circle()
                         .fill(Theme.color(at: group.colorIndex))
                         .frame(width: 8, height: 8)
                         .padding(7)
                         .background(
                             Circle()
-                                .fill(.ultraThinMaterial)
+                                .fill(.white.opacity(0.82))
                                 .frame(width: 20, height: 20)
                         )
                         .padding(6)
