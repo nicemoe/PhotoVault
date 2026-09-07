@@ -74,8 +74,9 @@ enum FileNames {
 private struct BookIndex: Codable {
     var books: [Book] = []
     var settings = ReaderSettings()
-    /// 书架布局是书架的偏好，不属于阅读设置，所以单独放一层
-    var shelfLayout: ShelfLayout = .grid
+    /// 书架布局是书架的偏好，不属于阅读设置，所以单独放一层。
+    /// 默认列表：书多起来之后一屏能看到的书名多得多，封面本来就只是配色块。
+    var shelfLayout: ShelfLayout = .list
     /// 全局外观。原来在相册那边的数据仓库里，拆成独立 App 后归到这儿。
     var appearance: AppTheme = .system
 
@@ -85,7 +86,7 @@ private struct BookIndex: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         books = try c.decodeIfPresent([Book].self, forKey: .books) ?? []
         settings = try c.decodeIfPresent(ReaderSettings.self, forKey: .settings) ?? ReaderSettings()
-        shelfLayout = try c.decodeIfPresent(ShelfLayout.self, forKey: .shelfLayout) ?? .grid
+        shelfLayout = try c.decodeIfPresent(ShelfLayout.self, forKey: .shelfLayout) ?? .list
         appearance = try c.decodeIfPresent(AppTheme.self, forKey: .appearance) ?? .system
     }
 
@@ -100,7 +101,7 @@ final class BookLibrary {
     var settings = ReaderSettings() {
         didSet { scheduleSave() }
     }
-    var shelfLayout: ShelfLayout = .grid {
+    var shelfLayout: ShelfLayout = .list {
         didSet { scheduleSave() }
     }
     var appearance: AppTheme = .system {
@@ -124,162 +125,6 @@ final class BookLibrary {
         shelfLayout = index.shelfLayout
         appearance = index.appearance
         repairTitles()
-    }
-
-    struct MigrationProgress {
-        var done: Int
-        var total: Int
-    }
-
-    /// 正在把老布局搬成新布局，nil 表示没有在搬
-    private(set) var migrating: MigrationProgress?
-
-    /// 老版本把书存成 `Books/<书的 UUID>/0.txt`——目录是一串 UUID、章节是
-    /// 纯数字。开了文件共享之后从访达打开看到的就是这个，哪本书哪一章都
-    /// 看不出来。这里把已经进来的书搬成 `Books/<书名>/0001 第一章 ….txt`。
-    ///
-    /// 三件事必须这么办，否则一千本书的库会一开就崩：
-    ///
-    /// 一、不能放在 load() 里。load() 是 init() 调的，跑在启动路径上，
-    /// 几十万次改名摆在那儿必然被系统的看门狗掐掉，而且每次启动崩在同一处。
-    /// 现在是书架出来之后的后台任务。
-    ///
-    /// 二、文件操作全在后台线程，主线程只更新进度。
-    ///
-    /// 三、攒一批存一次索引。索引整本写一次很贵（几十万个章节条目），
-    /// 每本存一次会把时间全花在写 json 上；中途被杀最多重做这一批，
-    /// relayout 本身可以重跑。
-    func migrateIfNeeded() async {
-        let pending = books.indices.filter { books[$0].dirName.isEmpty }
-        guard !pending.isEmpty else { return }
-
-        migrating = MigrationProgress(done: 0, total: pending.count)
-        defer { migrating = nil }
-
-        var sinceSave = 0
-        for (n, i) in pending.enumerated() {
-            guard i < books.count else { break }
-            let book = books[i]
-            let claimed = Set(books.enumerated().compactMap {
-                $0.offset == i ? nil : $0.element.dirName.lowercased()
-            })
-
-            let dirName = await Task.detached(priority: .utility) {
-                Self.relayout(book: book, claimed: claimed)
-            }.value
-
-            // 期间书可能被删了或者顺序变了，认一下 id 再写回去
-            if i < books.count, books[i].id == book.id {
-                books[i].dirName = dirName
-                sinceSave += 1
-            }
-            migrating = MigrationProgress(done: n + 1, total: pending.count)
-
-            if sinceSave >= 20 {
-                saveNow()
-                sinceSave = 0
-            }
-        }
-        saveNow()
-    }
-
-    /// 搬一本书，返回它最终的目录名。可以重跑，也能接上被掐断的那一次。
-    nonisolated private static func relayout(book: Book, claimed: Set<String>) -> String {
-        let fm = FileManager.default
-        let base = FileNames.sanitize(book.title)
-        let old = BookPaths.root.appendingPathComponent(book.id.uuidString, isDirectory: true)
-
-        // 一、还没搬过，UUID 目录还在
-        if fm.fileExists(atPath: old.path) {
-            let name = freshName(base: base, claimed: claimed, fallbackID: book.id)
-            renameChapters(in: old, chapters: book.chapters)
-            // 先改章节名、最后才改目录名：反过来的话中途被掐断，
-            // 光看目录在哪儿分不清章节改到第几个
-            try? fm.moveItem(at: old, to: BookPaths.directory(named: name))
-            return name
-        }
-
-        // 二、上次目录已经改过名，但索引没来得及存下来。
-        //
-        // 那一次是按「书名」「书名 (2)」「书名 (3)」…这么起名的，所以挨个
-        // 试过去，找一个磁盘上确实存在、又还没被别的书认领的。不这么找的话，
-        // 两本同名的书这次算出来的名字都是「书名」，第二本会认到第一本的目录上。
-        if let adopted = adopt(base: base, claimed: claimed) {
-            renameChapters(in: BookPaths.directory(named: adopted), chapters: book.chapters)
-            return adopted
-        }
-
-        // 三、文件本来就没了。名字照样补上，免得每次启动都重来一遍。
-        return freshName(base: base, claimed: claimed, fallbackID: book.id)
-    }
-
-    nonisolated private static func renameChapters(in dir: URL, chapters: [ChapterMeta]) {
-        let fm = FileManager.default
-        for chapter in chapters {
-            let from = dir.appendingPathComponent("\(chapter.index).txt")
-            guard fm.fileExists(atPath: from.path) else { continue }
-            let to = dir.appendingPathComponent(
-                BookPaths.chapterName(index: chapter.index, title: chapter.title))
-            if from != to { try? fm.moveItem(at: from, to: to) }
-        }
-    }
-
-    /// 挑一个还没被别的书认领、磁盘上也还不存在的名字
-    nonisolated private static func freshName(base: String, claimed: Set<String>,
-                                              fallbackID: UUID) -> String {
-        let fm = FileManager.default
-        for n in 1...50 {
-            let candidate = n == 1 ? base : "\(base) (\(n))"
-            if claimed.contains(candidate.lowercased()) { continue }
-            if fm.fileExists(atPath: BookPaths.directory(named: candidate).path) { continue }
-            return candidate
-        }
-        // 五十个都占着，用 id 兜底，至少保证唯一
-        return base + " [" + String(fallbackID.uuidString.prefix(8)) + "]"
-    }
-
-    /// 认领一个上次已经改好名、但索引没存下的目录
-    nonisolated private static func adopt(base: String, claimed: Set<String>) -> String? {
-        let fm = FileManager.default
-        for n in 1...50 {
-            let candidate = n == 1 ? base : "\(base) (\(n))"
-            if claimed.contains(candidate.lowercased()) { continue }
-            if fm.fileExists(atPath: BookPaths.directory(named: candidate).path) { return candidate }
-        }
-        return nil
-    }
-
-    /// 把已经存坏的书名修回来。
-    ///
-    /// 网页上传那条路以前拿 UUID 当前缀拼临时文件名，而书名是从文件名取的，
-    /// 于是那批书全叫「<一长串 UUID>-书名」。导入那边已经改了，但已经进来的
-    /// 书还顶着这个名字，总不能让人一本本手动改。
-    private func repairTitles() {
-        var fixed = false
-        for i in books.indices {
-            let clean = Self.stripUUIDPrefix(books[i].title)
-            guard clean != books[i].title, !clean.isEmpty else { continue }
-            books[i].title = clean
-            fixed = true
-        }
-        if fixed { scheduleSave() }
-    }
-
-    /// 开头是不是「8-4-4-4-12 个十六进制字符 + 短横」，是就剁掉
-    private static func stripUUIDPrefix(_ title: String) -> String {
-        let groups = [8, 4, 4, 4, 12]
-        var index = title.startIndex
-        for (n, count) in groups.enumerated() {
-            for _ in 0..<count {
-                guard index < title.endIndex, title[index].isHexDigit else { return title }
-                index = title.index(after: index)
-            }
-            // 每组后面都跟一个短横，最后一组后面那个是和书名之间的分隔
-            guard index < title.endIndex, title[index] == "-" else { return title }
-            index = title.index(after: index)
-            _ = n
-        }
-        return String(title[index...])
     }
 
     private var saveTask: Task<Void, Never>?
