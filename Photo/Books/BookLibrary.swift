@@ -10,6 +10,24 @@ enum BookPaths {
     static let root: URL = {
         let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        // 放一份说明。用 .md，不在收书的后缀里，不会把自己当成一本书导进去。
+        let readme = url.appendingPathComponent("使用说明.md")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            let text = """
+            # 书库
+
+            一本书 = 一个文件夹，里面是按顺序编好号的章节文件。
+
+            **要加书就把 TXT 或 EPUB 直接丢在这一层**，回到 App 就会自动
+            拆成章节、变成一个文件夹，原文件随后消失。整个文件夹丢进来也行，
+            里面的书会被收走。
+
+            不用另开一个「导入」文件夹：收进来的书是文件夹，还没收的是文件，
+            一眼就分得清。
+            """
+            try? Data(text.utf8).write(to: readme, options: .atomic)
+        }
         return url
     }()
 
@@ -297,18 +315,38 @@ final class BookLibrary {
     /// 留着只会让人以为还没导，下次进前台又导一遍。
     /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
     @discardableResult
-    func importFromInbox() async -> Int {
+    func importLooseFiles() async -> Int {
         let fm = FileManager.default
-        guard let walker = fm.enumerator(at: Paths.inbox,
-                                         includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return 0 }
-
         var files: [URL] = []
-        for case let url as URL in walker {
-            guard Self.importableExtensions.contains(url.pathExtension.lowercased()) else { continue }
-            files.append(url)
+
+        // 老版本单独开了个「导入」文件夹。里面要是还剩着东西就一并收走，
+        // 收完把那个空文件夹删掉，以后只认 Books 这一处。
+        let legacy = Paths.documents.appendingPathComponent("导入", isDirectory: true)
+        var roots = [BookPaths.root]
+        if fm.fileExists(atPath: legacy.path) { roots.append(legacy) }
+
+        for root in roots {
+            guard let items = try? fm.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]) else { continue }
+
+            for item in items {
+                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                if isDir {
+                    // 顶层的文件夹要么是一本已经收好的书，要么是刚拖进来的一堆书。
+                    // 里面全是「0001 xxx.txt」这种就是前者，别把人家的章节
+                    // 当成一本本新书导进去——万一索引丢了，那会把一本书炸成几百本。
+                    guard !Self.looksLikeBookFolder(item) else { continue }
+                    files.append(contentsOf: Self.importableFiles(under: item))
+                } else if Self.importableExtensions.contains(item.pathExtension.lowercased()) {
+                    files.append(item)
+                }
+            }
         }
-        guard !files.isEmpty else { return 0 }
+        guard !files.isEmpty else {
+            Self.removeIfEmpty(legacy)
+            return 0
+        }
 
         var saved = 0
         for url in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
@@ -317,17 +355,51 @@ final class BookLibrary {
             saved += 1
         }
 
-        // 收完之后把空掉的子文件夹一并清掉，文件夹里就只剩说明文件
-        if let subdirs = try? fm.contentsOfDirectory(at: Paths.inbox,
-                                                     includingPropertiesForKeys: [.isDirectoryKey],
-                                                     options: [.skipsHiddenFiles]) {
-            for dir in subdirs where (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                if let left = try? fm.contentsOfDirectory(atPath: dir.path), left.isEmpty {
-                    try? fm.removeItem(at: dir)
-                }
+        // 收完之后把空掉的文件夹清掉
+        if let items = try? fm.contentsOfDirectory(at: BookPaths.root,
+                                                   includingPropertiesForKeys: [.isDirectoryKey],
+                                                   options: [.skipsHiddenFiles]) {
+            for item in items where (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                guard !Self.looksLikeBookFolder(item) else { continue }
+                Self.removeIfEmpty(item)
             }
         }
+        Self.removeIfEmpty(legacy)
         return saved
+    }
+
+    /// 这个文件夹是不是一本已经收好的书：里面的 txt 都叫「0001 章节名.txt」
+    nonisolated private static func looksLikeBookFolder(_ dir: URL) -> Bool {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            return false
+        }
+        let texts = names.filter { $0.lowercased().hasSuffix(".txt") }
+        guard !texts.isEmpty else { return false }
+        return texts.allSatisfy { name in
+            let head = name.prefix(5)
+            return head.count == 5 && head.dropLast().allSatisfy(\.isNumber) && head.last == " "
+        }
+    }
+
+    nonisolated private static func importableFiles(under dir: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in walker
+        where importableExtensions.contains(url.pathExtension.lowercased()) {
+            out.append(url)
+        }
+        return out
+    }
+
+    nonisolated private static func removeIfEmpty(_ dir: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path),
+              let left = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+        // 只剩说明文件也算空
+        let real = left.filter { $0 != "使用说明.md" && !$0.hasPrefix(".") }
+        if real.isEmpty { try? fm.removeItem(at: dir) }
     }
 
     private static let importableExtensions: Set<String> = ["txt", "epub"]
