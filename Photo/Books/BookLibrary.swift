@@ -153,8 +153,18 @@ final class BookLibrary {
         didSet { scheduleSave() }
     }
 
-    /// 导入进度，nil 表示没有在导入
-    private(set) var importingTitle: String?
+    /// 导入进度。总数是开工前就数好的——一次丢一千本进来，
+    /// 只显示「正在解析《某某》」的话，人不知道还要等多久。
+    struct ImportProgress {
+        var done: Int
+        var total: Int
+        var title: String
+
+        var ratio: Double { total > 0 ? Double(done) / Double(total) : 0 }
+    }
+
+    /// nil 表示没有在导入
+    private(set) var importing: ImportProgress?
 
     /// 正在扫 Local。挡住重入，见 importLooseFiles。
     private var isScanning = false
@@ -246,8 +256,14 @@ final class BookLibrary {
     func importBook(from url: URL) async throws -> Book {
         let ext = url.pathExtension.lowercased()
         let fallbackTitle = url.deletingPathExtension().lastPathComponent
-        importingTitle = fallbackTitle
-        defer { importingTitle = nil }
+        // 批量导入时总数由调用方先数好；单本进来的自己开一个 1/1
+        let standalone = (importing == nil)
+        if standalone { importing = ImportProgress(done: 0, total: 1, title: fallbackTitle) }
+        else { importing?.title = fallbackTitle }
+        defer {
+            importing?.done += 1
+            if standalone { importing = nil }
+        }
 
         // 从「文件」App 拿到的是受保护的 URL，必须成对开关
         let scoped = url.startAccessingSecurityScopedResource()
@@ -351,6 +367,27 @@ final class BookLibrary {
     /// 留着只会让人以为还没导，下次进前台又导一遍。
     /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
     @discardableResult
+    /// 一次导一批。总数先摆出来，进度浮层才有「几分之几」可显示——
+    /// 一次选一百本却只看到「正在解析《某某》」，人不知道还要等多久。
+    func importBooks(from urls: [URL]) async -> (ok: Int, failures: [String]) {
+        guard !urls.isEmpty else { return (0, []) }
+        importing = ImportProgress(done: 0, total: urls.count, title: "")
+        defer { importing = nil }
+
+        var ok = 0
+        var failures: [String] = []
+        for url in urls {
+            do {
+                try await importBook(from: url)
+                ok += 1
+            } catch {
+                // 带上文件名，一次选多本时才知道是哪本没进来
+                failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        return (ok, failures)
+    }
+
     /// 收 Local 里还没收过的书。
     ///
     /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的原文件叫什么
@@ -364,8 +401,14 @@ final class BookLibrary {
         defer { isScanning = false }
 
         let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
-        let fresh = Self.scanLibrary().filter { !known.contains($0.lowercased()) }
+        // 扫盘甩到后台：一千个文件走一遍目录树也要点时间
+        let all = await Task.detached(priority: .utility) { Self.scanLibrary() }.value
+        let fresh = all.filter { !known.contains($0.lowercased()) }
         guard !fresh.isEmpty else { return 0 }
+
+        // 先把总数摆出来再开工，不然一千本书就是干等着，不知道到哪了
+        importing = ImportProgress(done: 0, total: fresh.count, title: "")
+        defer { importing = nil }
 
         var saved = 0
         for name in fresh.sorted() {

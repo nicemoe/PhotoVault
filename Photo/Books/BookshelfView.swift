@@ -168,8 +168,8 @@ struct BookshelfView: View {
             Text(errorMessage ?? "")
         }
         .overlay {
-            if let title = library.importingTitle {
-                ImportingOverlay(title: title)
+            if let progress = library.importing {
+                ImportingOverlay(progress: progress)
             }
         }
         .toast($toastItem)
@@ -253,17 +253,7 @@ struct BookshelfView: View {
     private func handleImport(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         Task {
-            var ok = 0
-            var failures: [String] = []
-            for url in urls {
-                do {
-                    try await library.importBook(from: url)
-                    ok += 1
-                } catch {
-                    // 带上文件名，一次选多本时才知道是哪本没进来
-                    failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
-                }
-            }
+            let (ok, failures) = await library.importBooks(from: urls)
             if ok > 0 {
                 toastItem = Toast(icon: "books.vertical.fill", text: "已导入 \(ok) 本")
             }
@@ -406,16 +396,32 @@ struct BookRow: View {
 // MARK: - 导入中
 
 struct ImportingOverlay: View {
-    let title: String
+    let progress: BookLibrary.ImportProgress
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.25).ignoresSafeArea()
-            VStack(spacing: 14) {
-                ProgressView().tint(Theme.accent)
-                Text("正在解析《\(title)》")
-                    .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(Theme.secondaryLabel)
+            VStack(spacing: 12) {
+                // 一本的时候没有「几分之几」可言，转圈就够了；
+                // 一批的时候要能看出还剩多少
+                if progress.total > 1 {
+                    ProgressView(value: progress.ratio).tint(Theme.accent).frame(width: 190)
+                    Text("正在解析 \(progress.done) / \(progress.total)")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.label)
+                        .monospacedDigit()
+                } else {
+                    ProgressView().tint(Theme.accent)
+                }
+
+                if !progress.title.isEmpty {
+                    Text("《\(progress.title)》")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.secondaryLabel)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 220)
+                }
             }
             .padding(28)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
