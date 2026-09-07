@@ -124,6 +124,43 @@ struct Asset: Identifiable, Codable, Hashable {
     }
 }
 
+/// 一段视频播完之后怎么办。
+enum PlaybackMode: String, Codable, CaseIterable, Identifiable {
+    /// 停在最后一帧
+    case once
+    /// 从头再放这一个
+    case loop
+    /// 接着放同目录里的下一个
+    case queue
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .once:  return "播完停下"
+        case .loop:  return "单个循环"
+        case .queue: return "连续播放"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .once:  return "arrow.right.to.line"
+        case .loop:  return "repeat.1"
+        case .queue: return "text.line.first.and.arrowtriangle.forward"
+        }
+    }
+
+    /// 按钮点一下换下一个
+    var next: PlaybackMode {
+        switch self {
+        case .once:  return .queue
+        case .queue: return .loop
+        case .loop:  return .once
+        }
+    }
+}
+
 // MARK: - 目录（分组下的一层）
 
 struct Folder: Identifiable, Codable, Hashable {
@@ -465,9 +502,12 @@ struct Library: Codable {
     var groupSort: SortMode = .manual
     var folderSort: SortMode = .manual
     var appearance: AppTheme = .system
+    /// 视频播完怎么办。记在这儿而不是留在播放页里：
+    /// 挑一次连续播放，下次点开另一个视频还该是连续播放。
+    var playbackMode: PlaybackMode = .once
 
     enum CodingKeys: String, CodingKey {
-        case groups, groupSort, folderSort, appearance
+        case groups, groupSort, folderSort, appearance, playbackMode
     }
 
     init() {}
@@ -478,6 +518,7 @@ struct Library: Codable {
         groupSort = try c.decodeIfPresent(SortMode.self, forKey: .groupSort) ?? .manual
         folderSort = try c.decodeIfPresent(SortMode.self, forKey: .folderSort) ?? .manual
         appearance = try c.decodeIfPresent(AppTheme.self, forKey: .appearance) ?? .system
+        playbackMode = try c.decodeIfPresent(PlaybackMode.self, forKey: .playbackMode) ?? .once
     }
 }
 
