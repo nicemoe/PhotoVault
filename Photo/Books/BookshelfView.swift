@@ -228,6 +228,9 @@ struct BookshelfView: View {
         let saved = await library.importLooseFiles()
         let gone = library.pruneMissingSources()
         let redone = await library.refreshEdited()
+        // 兜底：清掉认不出主人的章节表。删书时本来就会一并删，这里管的是
+        // 漏网的那些——索引被删过之后重收，旧 id 那批就没人认领了。
+        await library.sweepOrphanChapters()
         guard saved > 0 || gone > 0 || redone > 0 else { return }
 
         let parts = [saved > 0 ? "收进 \(saved) 本" : nil,

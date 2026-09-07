@@ -3,15 +3,18 @@ import Observation
 
 /// 书在磁盘上怎么摆。
 ///
-///     Documents/                 ← 访达里看得到的，全是人自己的东西
+///     Documents/                 ← 访达里看得到的，只有人自己的东西
 ///       Books/
 ///         斗破苍穹.txt          ← 一本书就一个文件，UTF-8
 ///         三体.txt
-///       books.json              ← 书目 + 阅读进度 + 书签
 ///
 ///     Library/Application Support/   ← App 内部，访达里看不到
+///       books.json              ← 书目 + 阅读进度 + 书签
 ///       Chapters/
 ///         <书的 id>.json        ← 这本书每章的标题 + 起始字节 + 长度
+///
+/// 分工是「这东西是谁的」：txt 是人的，索引和章节表是我们记账用的。
+/// 索引摆在书旁边只会让人误以为该管它，手改坏了还连累阅读进度。
 ///
 /// 一本书一个文件，不再按章拆成几百个小文件。
 ///
@@ -46,6 +49,9 @@ enum BookPaths {
               那只是从别处下载时碰巧带的编码，不是你要的东西。
             - **EPUB 会被抽成 txt，原来的 .epub 删掉**。同理。
 
+            这个文件夹里只有 txt，没有 App 自己记账的东西——书目、阅读进度、
+            章节位置都收在 App 内部，不用也不该在这儿管。
+
             在这里删掉某本书的 txt，App 里那本也会跟着消失；
             在 App 里删书，这里的文件也会被删。
             """
@@ -54,7 +60,15 @@ enum BookPaths {
         return url
     }()
 
-    static let indexFile = Paths.documents.appendingPathComponent("books.json")
+    /// 书目、阅读进度、书签。一千本约 460 KB。
+    ///
+    /// 早先放在 Documents 里，还给它打过 BSD 的 immutable 标志让访达改不动。
+    /// 那是在补一个不该存在的问题——搬进内部目录，它压根就不出现在那儿。
+    static let indexFile: URL = {
+        let url = AppStore.file("books.json")
+        AppStore.migrateFromDocuments("books.json", to: url)
+        return url
+    }()
 
     static func file(named name: String) -> URL {
         root.appendingPathComponent(name)
@@ -71,10 +85,11 @@ enum BookPaths {
     /// 访达里不该看见，丢了也能重拆。用 Application Support 而不是
     /// Caches——Caches 系统会挑时候清掉，清一次就是一千本书重拆一遍。
     static let chaptersRoot: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask)[0]
-        let url = base.appendingPathComponent("Chapters", isDirectory: true)
+        let url = AppStore.root.appendingPathComponent("Chapters", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        // 章节表能从正文重拆，没必要让它把 iCloud 备份撑大。
+        // 索引不排除——阅读进度和书签只此一份，换手机时正该跟过去。
+        AppStore.excludeFromBackup(url)
         return url
     }()
 
@@ -198,11 +213,9 @@ final class BookLibrary {
         guard let index = try? Coders.makeDecoder().decode(BookIndex.self, from: data) else {
             let stamp = ISO8601DateFormatter().string(from: Date())
                 .replacingOccurrences(of: ":", with: "-")
-            // 索引平时是锁住的，挪走之前得先摘锁
-            LockedFile.unlock(BookPaths.indexFile)
             try? FileManager.default.moveItem(
                 at: BookPaths.indexFile,
-                to: Paths.documents.appendingPathComponent("books.损坏-\(stamp).json"))
+                to: AppStore.file("books.损坏-\(stamp).json"))
             return
         }
         books = index.books
@@ -231,7 +244,7 @@ final class BookLibrary {
 
     private nonisolated static func write(_ snapshot: BookIndex) async {
         guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
-        LockedFile.write(data, to: BookPaths.indexFile)
+        try? data.write(to: BookPaths.indexFile, options: .atomic)
     }
 
     // MARK: 查询
@@ -547,6 +560,45 @@ final class BookLibrary {
         return built.metas
     }
 
+    /// 清掉认不出主人的章节表。
+    ///
+    /// 正常路径上删书会顺手删掉它——App 里删书、或者在访达里删了 txt 之后
+    /// 对账清记录，两条路都删。但有几种情况漏得下：
+    ///
+    /// - books.json 被删或写坏之后，书全部重新收一遍，拿的是新的 id，
+    ///   旧的那一批章节表就全成了孤儿，再没人会去删它们
+    /// - 章节表写完了、索引还没落盘，App 就被杀掉
+    ///
+    /// 一本书的章节表几十上百 KB，一千本攒下来就是几十 MB 的死数据，
+    /// 而且它在 App 内部目录里，人自己看不见也清不掉。所以每次对账兜一次底。
+    nonisolated private static func sweepChapters(keeping live: Set<String>) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: BookPaths.chaptersRoot.path)
+        else { return }
+        for name in names where name.hasSuffix(".json") && !live.contains(name) {
+            try? fm.removeItem(at: BookPaths.chaptersRoot.appendingPathComponent(name))
+        }
+    }
+
+    /// 索引里这些书，各自的章节表文件该叫什么
+    private var liveChapterFiles: Set<String> {
+        Set(books.map { $0.id.uuidString + ".json" })
+    }
+
+    /// 对账的最后一步：把没人认领的章节表清掉。
+    ///
+    /// 单独一个方法而不是塞进 pruneMissingSources：那个是「原文件没了就删书」，
+    /// 只看得到索引里还有的书；孤儿章节表的主人早就不在索引里了，
+    /// 得反过来从磁盘那边数。
+    func sweepOrphanChapters() async {
+        // 书架空着的时候不扫。那可能是索引刚被删、书还没重收进来，
+        // 这会儿把章节表全清掉，等于逼着一千本书重拆一遍。
+        // 而真的一本书都没有的话，每本删的时候已经把自己那份带走了。
+        guard !books.isEmpty else { return }
+        let live = liveChapterFiles
+        await Task.detached(priority: .utility) { Self.sweepChapters(keeping: live) }.value
+    }
+
     // MARK: 章节表的读写
 
     nonisolated private static func writeChapters(_ list: [ChapterMeta], for bookID: UUID) {
@@ -684,6 +736,15 @@ final class BookLibrary {
         if target.standardizedFileURL != source.standardizedFileURL,
            source.standardizedFileURL.path.hasPrefix(BookPaths.root.standardizedFileURL.path + "/") {
             try? fm.removeItem(at: source)
+            // 拖一整个文件夹进来的话，书被收到根上之后那个文件夹就空了。
+            // 只删确实是因为我们才空掉的那一个，不递归、不碰还有东西的——
+            // 人自己建的空文件夹轮不到我们做主。
+            let parent = source.deletingLastPathComponent().standardizedFileURL
+            if parent.path != BookPaths.root.standardizedFileURL.path,
+               parent.path.hasPrefix(BookPaths.root.standardizedFileURL.path + "/"),
+               (try? fm.contentsOfDirectory(atPath: parent.path))?.isEmpty == true {
+                try? fm.removeItem(at: parent)
+            }
         }
         return (metas, characters, blob.count, name)
     }

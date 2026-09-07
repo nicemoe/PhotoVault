@@ -8,34 +8,50 @@ enum Paths {
 
 }
 
-/// 写一份在访达里改不动、删不掉的文件。
+/// App 内部目录。放索引、章节表这些「我们自己记账用」的东西。
 ///
-/// 开了文件共享之后 Documents 整个是敞开的，索引就摆在 Books 旁边。
-/// 它是给人看的——想知道 App 怎么记账，打开看一眼、拷一份走都行；
-/// 但不该给人改：手改坏了，书架虽然能照着 Books 里的文件重建，
-/// 阅读进度和书签还是没了。
+/// 和 Documents 的分工：Documents 开了文件共享，访达里看得见、拖得动，
+/// 那里只该放人自己的东西——一本一本的 txt。索引不是人的东西，它是
+/// 我们怎么记账的实现细节，摆在书旁边只会让人误以为该管它，
+/// 手改坏了还得连累阅读进度。
 ///
-/// iOS 没有「对 App 可写、对访达只读」这种开关，两边是同一个身份。
-/// 能用的是 BSD 的 user immutable 标志（就是 `chflags uchg`）：
-/// 打上之后，写、改名、删除一律 EPERM，访达里会直接报错做不了。
-/// App 自己也一样被挡，所以每次落盘前先摘掉、写完再打上。
-///
-/// 单说 0444 那种只读权限位是不够的：能不能删一个文件，看的是所在目录
-/// 的写权限，不是文件自己的——只读文件照样能在访达里拖进废纸篓。
-enum LockedFile {
+/// 原来试过留在 Documents 里、给文件打 BSD 的 immutable 标志（`chflags uchg`）
+/// 让访达改不动。能work，但那是在补一个不该存在的问题——最省事的办法是
+/// 它压根就不出现在那儿。
+enum AppStore {
 
-    static func write(_ data: Data, to url: URL) {
-        // 原子写是「写个临时文件再改名盖上去」，盖不掉一个上了锁的文件，
-        // 所以先摘锁。中途被杀最多是这一次没锁上，下次写完照样补上。
-        unlock(url)
-        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
-        // 原子写换的是一个新 inode，锁不会跟过来，得重新打
-        try? FileManager.default.setAttributes([.immutable: true], ofItemAtPath: url.path)
+    static let root: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
+
+    static func file(_ name: String) -> URL { root.appendingPathComponent(name) }
+
+    /// 从 Documents 搬一件东西进来。旧版本把它放在共享目录里，这里搬一次家。
+    ///
+    /// 目标已经在了就不动——搬过一次之后 Documents 那份如果又冒出来
+    /// （从备份恢复、别的设备同步过来），也是旧的，不该盖掉现在这份。
+    static func migrateFromDocuments(_ name: String, to target: URL) {
+        let fm = FileManager.default
+        let old = Paths.documents.appendingPathComponent(name)
+        guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: target.path) else { return }
+        // 旧版本给索引上过 immutable 锁，锁着的文件搬不动，先摘掉
+        try? fm.setAttributes([.immutable: false], ofItemAtPath: old.path)
+        try? fm.moveItem(at: old, to: target)
     }
 
-    /// 摘锁。要移动、删除这个文件之前必须先来一下，否则一律 EPERM。
-    static func unlock(_ url: URL) {
-        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: url.path)
+    /// 从 iCloud/iTunes 备份里排除。
+    ///
+    /// 给能重算的东西用——章节表丢了照着正文重拆就有，没必要让它把
+    /// 用户的备份撑大。索引不用排除：阅读进度和书签只此一份，
+    /// 换手机的时候恰恰是最该跟过去的。
+    static func excludeFromBackup(_ url: URL) {
+        var url = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
     }
 }
 
