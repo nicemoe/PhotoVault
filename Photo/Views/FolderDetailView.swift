@@ -371,6 +371,22 @@ struct FolderDetailView: View {
                         .padding(6)
                     }
                 }
+                // 看到一半的在底边留一根细条。一屏几十个视频，光看角标分不出
+                // 哪些看过——这根条就是「上次停在这儿」的唯一提示。
+                .overlay(alignment: .bottom) {
+                    if asset.watchedRatio > 0 {
+                        Capsule()
+                            .fill(.white.opacity(0.3))
+                            .frame(height: 2.5)
+                            .overlay(alignment: .leading) {
+                                Capsule()
+                                    .fill(Theme.accent)
+                                    .scaleEffect(x: asset.watchedRatio, anchor: .leading)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 5)
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if isSelecting {
                         Image(systemName: selected ? "checkmark.circle.fill" : "circle")

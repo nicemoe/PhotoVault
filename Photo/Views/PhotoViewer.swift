@@ -194,11 +194,15 @@ struct PhotoViewer: View {
                   onPrevious: neighbour(of: asset, in: live, step: -1),
                   onNext: neighbour(of: asset, in: live, step: 1),
                   title: title(for: asset),
-                  // 横竖屏切换时这个视图会重建，用它把进度接上
-                  startAt: resumeAsset == asset.id ? resumeTime : 0,
+                  // 从哪儿接着播。这一次浏览里翻走又翻回来（横竖屏切换也算，
+                  // 视图整个会重建）用内存里那个，精确到秒；不然用上次退出时
+                  // 存进索引的位置——那才是「上次看到哪儿了」。
+                  startAt: resumeAsset == asset.id ? resumeTime : asset.resumeAt,
+                  announceResume: resumeAsset != asset.id && asset.resumeAt > 0,
                   onLeave: { time in
                       resumeAsset = asset.id
                       resumeTime = time
+                      store.setPlayback(time, for: asset.id)
                   })
     }
 

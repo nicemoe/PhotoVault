@@ -218,8 +218,14 @@ struct VideoPage: View {
     var title: String = ""
     /// 从这个位置接着播。横竖屏切换时视图会重建，靠它接上进度。
     var startAt: Double = 0
+    /// 这次的 startAt 是上次退出时存下来的，不是刚才翻走翻回来的。
+    /// 差别只在要不要提示一句——横竖屏转一下就弹「从 xx:xx 继续」很吵，
+    /// 而隔了一天再点开，不说一声人会以为播错地方了。
+    var announceResume = false
     /// 视图要走了，把当前进度交出去
     var onLeave: ((Double) -> Void)?
+
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -337,6 +343,13 @@ struct VideoPage: View {
         .ignoresSafeArea()
         .onChange(of: isCurrent, initial: true) { _, current in
             if current { start() } else { stop() }
+        }
+        // 退到后台之后可能就再也回不来了——人上划一抹 App 就没了，
+        // onDisappear 不会走。所以趁这一下先把进度交出去，播放本身不动，
+        // 切回来还能接着放。
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active, current > 0.5 else { return }
+            onLeave?(current)
         }
         .onDisappear {
             stop()
@@ -698,10 +711,11 @@ struct VideoPage: View {
             }
         }
 
-        // 横竖屏切换会重建这个视图，从上次的位置接着播，别退回开头
+        // 从上次的位置接着播，别退回开头
         if startAt > 0.5 {
             current = startAt
             made.seek(to: CMTime(seconds: startAt, preferredTimescale: 600))
+            if announceResume { show(hint: "从 \(timeText(startAt)) 继续") }
         }
 
         made.play()

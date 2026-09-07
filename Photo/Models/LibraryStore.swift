@@ -92,6 +92,8 @@ final class LibraryStore {
         guard let decoded = try? Coders.makeDecoder().decode(Library.self, from: data) else {
             let stamp = ISO8601DateFormatter().string(from: Date())
                 .replacingOccurrences(of: ":", with: "-")
+            // 索引平时是锁住的，挪走之前得先摘锁
+            LockedFile.unlock(Paths.libraryFile)
             try? FileManager.default.moveItem(
                 at: Paths.libraryFile,
                 to: Paths.documents.appendingPathComponent("library.损坏-\(stamp).json"))
@@ -121,7 +123,7 @@ final class LibraryStore {
 
     private nonisolated static func write(_ snapshot: Library) async {
         guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
-        try? data.write(to: Paths.libraryFile, options: .atomic)
+        LockedFile.write(data, to: Paths.libraryFile)
     }
 
     // MARK: 查询
@@ -212,6 +214,34 @@ final class LibraryStore {
             }
         }
         return nil
+    }
+
+    /// 记下这个视频看到第几秒了。
+    ///
+    /// 一次播放最多来两次：离开播放页时一次，App 退到后台时一次（那一下
+    /// 之后可能就被上划杀掉了，不趁机存就全丢了）。播放中不写盘——进度差
+    /// 几秒无所谓，而每秒写一次等于把整个 library.json 反复重写一遍。
+    ///
+    /// 既然一次播放才这么几下，就直接 saveNow 落盘，不走那个 400ms 的合并
+    /// 队列：合并是为了扛住批量导入那种连珠炮，而这里恰恰相反——最需要写
+    /// 进去的那一次，正好是 App 马上要被杀掉的那一次。
+    ///
+    /// 存 0 表示「当没看过」，刚点开就走的和已经看完的都归到这一类。
+    func setPlayback(_ seconds: Double, for assetID: UUID) {
+        for gi in library.groups.indices {
+            for fi in library.groups[gi].folders.indices {
+                guard let ai = library.groups[gi].folders[fi].assets
+                    .firstIndex(where: { $0.id == assetID }) else { continue }
+                var asset = library.groups[gi].folders[fi].assets[ai]
+                guard asset.isVideo else { return }
+                let clean = seconds.isFinite ? max(0, seconds) : 0
+                guard abs(clean - asset.playbackSeconds) > 1 else { return }
+                asset.playbackSeconds = clean
+                library.groups[gi].folders[fi].assets[ai] = asset
+                saveNow()
+                return
+            }
+        }
     }
 
     // MARK: 分组
@@ -681,6 +711,39 @@ final class LibraryStore {
         ThumbnailCache.shared.invalidate(asset.id)
     }
 
+}
+
+// MARK: - 只读落盘
+
+/// 写一份在访达里改不动、删不掉的文件。
+///
+/// 开了文件共享之后 Documents 整个是敞开的，索引就摆在 Media 旁边。
+/// 它是给人看的——想知道 App 怎么记账，打开看一眼、拷一份走都行；
+/// 但不该给人改：手改坏了，重建虽然救得回图库，收藏和排序还是没了。
+///
+/// iOS 没有「对 App 可写、对访达只读」这种开关，两边是同一个身份。
+/// 能用的是 BSD 的 user immutable 标志（就是 `chflags uchg`）：
+/// 打上之后，写、改名、删除一律 EPERM，访达里会直接报错做不了。
+/// App 自己也一样被挡，所以每次落盘前先摘掉、写完再打上。
+///
+/// 单说 0444 那种只读权限位是不够的：能不能删一个文件，看的是所在目录
+/// 的写权限，不是文件自己的——只读文件照样能在访达里拖进废纸篓。
+enum LockedFile {
+
+    static func write(_ data: Data, to url: URL) {
+        let fm = FileManager.default
+        // 原子写是「写个临时文件再改名盖上去」，盖不掉一个上了锁的文件，
+        // 所以先摘锁。中途被杀最多是这一次没锁上，下次写完照样补上。
+        unlock(url)
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+        // 原子写换的是一个新 inode，锁不会跟过来，得重新打
+        try? fm.setAttributes([.immutable: true], ofItemAtPath: url.path)
+    }
+
+    /// 摘锁。要移动、删除这个文件之前必须先来一下，否则一律 EPERM。
+    static func unlock(_ url: URL) {
+        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: url.path)
+    }
 }
 
 // MARK: - 编解码配置

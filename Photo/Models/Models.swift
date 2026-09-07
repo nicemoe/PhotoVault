@@ -25,6 +25,11 @@ struct Asset: Identifiable, Codable, Hashable {
     var byteCount: Int = 0
     /// 视频时长（秒）；图片是 0
     var duration: Double = 0
+    /// 上次看到第几秒。0 表示没看过、或者已经看完了。
+    ///
+    /// 只在离开播放页时写一次，不是每秒都写——进度这种东西差个几秒无所谓，
+    /// 而每秒落一次盘会让整个 library.json 反复重写。
+    var playbackSeconds: Double = 0
     var createdAt: Date = Date()
 
     init(id: UUID = UUID(), fileName: String, originalName: String = "",
@@ -55,10 +60,28 @@ struct Asset: Identifiable, Codable, Hashable {
         height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0
         byteCount = try c.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
         duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
+        playbackSeconds = try c.decodeIfPresent(Double.self, forKey: .playbackSeconds) ?? 0
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     }
 
     var isVideo: Bool { kind == .video }
+
+    /// 看过一截、又没看完的才算「能接着看」。
+    ///
+    /// 两头都掐掉：开头十几秒就走的，多半是点开看了一眼，下次还从头开始更顺；
+    /// 快到结尾的，人已经看完了，再从最后五秒接着放没意义。
+    var resumeAt: Double {
+        guard isVideo, duration > 0, playbackSeconds > 0 else { return 0 }
+        guard playbackSeconds > min(15, duration * 0.05) else { return 0 }
+        guard playbackSeconds < duration - max(10, duration * 0.02) else { return 0 }
+        return playbackSeconds
+    }
+
+    /// 看了百分之多少，0 表示没看过。列表里的那根细条用这个。
+    var watchedRatio: Double {
+        guard isVideo, duration > 0, playbackSeconds > 0 else { return 0 }
+        return min(1, playbackSeconds / duration)
+    }
 
     var aspectRatio: CGFloat {
         guard width > 0, height > 0 else { return 1 }
