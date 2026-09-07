@@ -222,19 +222,21 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             // 进入后台后 socket 会被系统回收，直接停掉避免显示"运行中"却连不上
             if phase == .background, wifi.isRunning { wifi.stop() }
-            // 电脑上把文件拖进「导入」文件夹后，回到 App 就收走。
-            // 只在切回前台时扫一次——文件是在 App 不活跃的时候放进来的，
+            // 电脑上往共享目录里加删文件之后，回到 App 对一次账。
+            // 只在切回前台时扫一次——文件是在 App 不活跃的时候动的，
             // 常驻监听目录只会白耗电。
-            if phase == .active { Task { await collectInbox() } }
+            if phase == .active { Task { await syncDisk() } }
         }
-        .task { await collectInbox() }
+        .task { await syncDisk() }
         .toast($toastItem)
     }
 
-    private func collectInbox() async {
-        let saved = await store.importFromInbox()
-        guard saved > 0 else { return }
-        toastItem = Toast(icon: "tray.and.arrow.down.fill", text: "已收进 \(saved) 个文件")
+    private func syncDisk() async {
+        let (added, removed) = await store.syncWithDisk()
+        guard added > 0 || removed > 0 else { return }
+        let parts = [added > 0 ? "收进 \(added) 个" : nil,
+                     removed > 0 ? "移除 \(removed) 个" : nil].compactMap { $0 }
+        toastItem = Toast(icon: "arrow.triangle.2.circlepath", text: parts.joined(separator: "，"))
     }
 
     // MARK: 加号菜单
@@ -314,19 +316,25 @@ struct RootView: View {
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
             // 先按文件取，顺带拿到原始文件名当标题
             let picked = try? await item.loadTransferable(type: PickedFile.self)
+            // 相册给的是一份拷贝，落在临时目录里。用 defer 统一收拾：
+            // 原来是在每个分支里各删一次，而「文件拿到了但读不出内容」那条
+            // 分支会掉到最后的按字节读上，那份拷贝就没人管了——一次导几百张
+            // 4K 视频，攒下来是几十上百 GB。视频那条路 persistVideo 是把文件
+            // 搬走的，这里再删一次删的是不存在的路径，无害。
+            defer {
+                if let picked { try? FileManager.default.removeItem(at: picked.url) }
+            }
 
             if isVideo {
                 // 视频按文件搬，不读进内存——几百 MB 的 4K 会直接把 App 撑爆
                 if let picked {
                     if await store.addVideo(from: picked.url, to: folderID,
                                             name: picked.name) != nil { videos += 1 }
-                    try? FileManager.default.removeItem(at: picked.url)
                 }
             } else if let picked, let data = try? Data(contentsOf: picked.url) {
                 if await store.addImage(data: data, to: folderID, name: picked.name) != nil {
                     photos += 1
                 }
-                try? FileManager.default.removeItem(at: picked.url)
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       await store.addImage(data: data, to: folderID) != nil {
                 photos += 1

@@ -299,7 +299,10 @@ function renderToolbar(){
   }else if(view.level === 'folders'){
     // 分组内部只提供「新建目录」。新建分组是上一层的事，
     // 放在这里既和当前上下文无关，也会让层级看着混乱。
-    html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`;
+    // 分组里除了建目录，还能直接丢一整个文件夹进来，
+    // 里面的层级会原样建成目录
+    html = `<button class="btn primary" onclick="promptCreateFolder()">${plus}新建目录</button>`
+         + `<button class="btn" onclick="folderPick()">${plus}上传整个文件夹</button>`;
   }else{
     // 目录里既能传图，也能再建子目录
     html = `<button class="btn primary" onclick="filePick()">${plus}选择文件上传</button>`
@@ -550,6 +553,15 @@ picker.multiple = true;
 picker.onchange = () => { if(picker.files.length) upload(picker.files); picker.value = ''; };
 function filePick(){ picker.click(); }
 
+// 只选文件夹。webkitdirectory 选中之后每个 File 上会带 webkitRelativePath，
+// 里面就是相对这个文件夹的路径，正好拿来在手机端逐级建目录。
+const dirPicker = document.createElement('input');
+dirPicker.type = 'file';
+dirPicker.webkitdirectory = true;
+dirPicker.multiple = true;
+dirPicker.onchange = () => { if(dirPicker.files.length) upload(dirPicker.files); dirPicker.value = ''; };
+function folderPick(){ dirPicker.click(); }
+
 /* ---------- 拖拽 ---------- */
 // 一次可以拖多张图片，也可以拖整个文件夹（递归取里面的图片）。
 // 在目录页拖到页面任意位置即可；在分组页可以直接拖到某个目录卡片上。
@@ -568,8 +580,8 @@ function dragMaskText(){
     title.textContent = `松开上传到「${folderCache ? folderCache.name : '当前目录'}」`;
     hint.textContent = '支持一次拖入多张图片，也可以直接拖整个文件夹';
   }else if(view.level === 'folders'){
-    title.textContent = '把图片拖到某个目录卡片上';
-    hint.textContent = '松开即可上传到那个目录；也可以先点进目录再拖';
+    title.textContent = '松开上传到这个分组';
+    hint.textContent = '拖文件夹进来会原样建成目录；拖到某个目录卡片上则直接进那个目录';
   }else{
     title.textContent = '请先进入一个目录';
     hint.textContent = '图片需要放在「分组 → 目录」下面';
@@ -580,7 +592,7 @@ function showDragMask(){
   dragMaskText();
   const mask = $('#dragmask');
   // 目录页要能看清卡片往上拖，所以只给顶部提示，不盖全屏
-  mask.classList.toggle('hintmode', view.level === 'folders');
+  mask.classList.toggle('hintmode', view.level === 'folders');   // 卡片还要看得见
   mask.classList.add('on');
 }
 function hideDragMask(){ dragDepth = 0; $('#dragmask').classList.remove('on'); }
@@ -603,8 +615,8 @@ window.addEventListener('drop', async e => {
   if(!hasFiles(e)) return;
   e.preventDefault();
   hideDragMask();
-  if(view.level !== 'photos'){
-    toast(view.level === 'folders' ? '请拖到某个目录卡片上' : '请先进入一个目录');
+  if(view.level === 'groups'){
+    toast('请先点进一个分组');
     return;
   }
   upload(await collectFiles(e.dataTransfer));
@@ -626,7 +638,7 @@ async function cardDrop(e, el, folderId){
   e.preventDefault(); e.stopPropagation();
   el.classList.remove('dropping');
   hideDragMask();
-  upload(await collectFiles(e.dataTransfer), folderId);
+  upload(await collectFiles(e.dataTransfer), 'folder=' + folderId);
 }
 
 // webkitGetAsEntry 必须在 drop 事件里同步调用，之后条目就失效了
@@ -722,9 +734,12 @@ function hideUploadProgress(){
 
 let uploading = false;
 
-async function upload(fileList, folderId){
-  const target = folderId || view.folderId;
-  if(!target){ toast('请先进入一个目录'); return; }
+// target 是一截查询串：folder=xxx 或者 group=xxx。
+// 目录页上传落到当前目录，分组页上传落到分组，
+// 后者把文件名里的相对路径当成要建的目录。
+async function upload(fileList, target){
+  target = target || defaultTarget();
+  if(!target){ toast('请先进入一个分组或目录'); return; }
   if(uploading){ toast('还有一批正在上传，请稍候'); return; }
 
   const all = [...fileList];
@@ -768,14 +783,20 @@ async function upload(fileList, folderId){
   refreshAfterUpload(target);
 }
 
+function defaultTarget(){
+  if(view.folderId) return 'folder=' + view.folderId;
+  if(view.level === 'folders' && view.groupId) return 'group=' + view.groupId;
+  return null;
+}
+
 // 单个文件直传：请求体就是文件本身，不套 multipart。
 // 大视频套 multipart 的话手机端磁盘上会同时存在两份（收到的请求体、
 // 从里面拆出来的那一段），8GB 的片子要占 16GB。
-function sendFile(file, folderId, onProgress){
+function sendFile(file, target, onProgress){
   return new Promise((resolve, reject) => {
     const name = file.relPath || file.webkitRelativePath || file.name;
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload-file?folder=' + folderId + '&name=' + encodeURIComponent(name));
+    xhr.open('POST', '/api/upload-file?' + target + '&name=' + encodeURIComponent(name));
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.upload.onprogress = e => { if(e.lengthComputable) onProgress(e.loaded); };
     xhr.onload = () => {
@@ -787,14 +808,14 @@ function sendFile(file, folderId, onProgress){
   });
 }
 
-function sendBatch(files, folderId, onProgress){
+function sendBatch(files, target, onProgress){
   return new Promise((resolve, reject) => {
     const form = new FormData();
     // 把相对路径当文件名发过去，手机端照着逐级建目录
     files.forEach(f => form.append('files', f, f.relPath || f.webkitRelativePath || f.name));
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload?folder=' + folderId);
+    xhr.open('POST', '/api/upload?' + target);
     xhr.upload.onprogress = e => { if(e.lengthComputable) onProgress(e.loaded); };
     xhr.onload = () => {
       try{ resolve(JSON.parse(xhr.responseText)); }
@@ -805,7 +826,8 @@ function sendBatch(files, folderId, onProgress){
   });
 }
 
-function refreshAfterUpload(folderId){
+function refreshAfterUpload(target){
+  const folderId = (target || '').startsWith('folder=') ? target.slice(7) : null;
   if(view.level === 'photos' && view.folderId === folderId){
     go('photos', view.groupId, view.folderId);
   }else{

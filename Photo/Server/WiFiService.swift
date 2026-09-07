@@ -19,6 +19,11 @@ final class WiFiService {
     private(set) var lastEvent: String?
 
     private let server = HTTPServer()
+    /// 上一次有人来访的时间。空闲自动停服要用。
+    private var lastActivity = Date()
+    private var idleWatch: Task<Void, Never>?
+    /// 没人来这么久就自己关掉。见 watchIdle。
+    private static let idleLimit: TimeInterval = 20 * 60
     private let store: LibraryStore
 
     init(store: LibraryStore) {
@@ -54,16 +59,51 @@ final class WiFiService {
                 return await self.route(request)
             }
             status = .running(url: "http://\(ip):\(port)")
+            // 服务只能在前台活着——App 一被挂起 NWListener 就没了，所以传输
+            // 期间必须拦着屏幕自动锁。代价是这段时间屏幕一直亮着，很费电，
+            // 所以下面盯着，没人用就自己关掉。
             UIApplication.shared.isIdleTimerDisabled = true
+            lastActivity = Date()
+            watchIdle()
         } catch {
             status = .failed(error.localizedDescription)
         }
     }
 
     func stop() {
+        idleWatch?.cancel()
+        idleWatch = nil
         server.stop()
         status = .stopped
         UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    /// 没人用就把服务关掉。
+    ///
+    /// 开着传输的这段时间屏幕是被强制点亮的，这是整个 App 里最费电的状态——
+    /// 传完了忘记关，一晚上就能把电耗光。所以盯一下：二十分钟没人来访就自己收。
+    ///
+    /// 两个条件都要满足才算「没人用」：
+    ///
+    /// - 二十分钟没有请求进来。网页那边每 10 秒会拉一次列表，所以只要还有人
+    ///   开着页面，这个条件就不成立。
+    /// - 手上没有连着的客户端。正在传一个 8GB 的片子时连接是在的，但那一个
+    ///   请求要跑很久才完成——只看「最后一次请求什么时候」会把它掐断。
+    ///
+    /// 一分钟醒一次。这个频率本身的开销可以忽略，比屏幕多亮一分钟便宜得多。
+    private func watchIdle() {
+        idleWatch?.cancel()
+        idleWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self, self.isRunning else { return }
+                guard !self.server.hasActiveConnections,
+                      Date().timeIntervalSince(self.lastActivity) > Self.idleLimit else { continue }
+                self.stop()
+                self.lastEvent = "闲置太久，已自动关闭传输"
+                return
+            }
+        }
     }
 
     // MARK: 路由
@@ -104,6 +144,7 @@ final class WiFiService {
     private func lookupAsset(_ id: UUID) -> Asset? { store.asset(id) }
 
     private func handle(_ request: HTTPRequest) async -> HTTPResponse {
+        lastActivity = Date()
         switch (request.method, request.path) {
 
         case ("GET", "/"), ("GET", "/index.html"):
@@ -183,12 +224,13 @@ final class WiFiService {
         // 和从里面拆出来的那一段。8GB 的片子要占 16GB。直传的话收到的
         // 那个文件就是成品，直接搬进媒体库，只占一份。
         case ("POST", "/api/upload-file"):
-            guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
-                  store.folder(folderID) != nil else {
-                return .error("目标目录不存在", status: 404)
+            guard let destination = destination(from: request) else {
+                return .error("目标不存在", status: 404)
             }
             let rawName = request.query["name"] ?? ""
-            let target = resolveFolder(for: rawName, under: folderID)
+            guard let target = resolveFolder(for: rawName, at: destination) else {
+                return .error("目标不存在", status: 404)
+            }
 
             // 小文件不会落盘，body 还在内存里，先写成临时文件再走同一条路
             var source = request.bodyFile
@@ -217,14 +259,20 @@ final class WiFiService {
             if ok {
                 receivedCount += 1
                 note("收到「\((rawName as NSString).lastPathComponent)」")
-                store.saveNow()
+                // 这条路是一个文件一个请求，网页那边挑一整个相册就是几千个请求
+                // 挨着来。每来一个就整份索引写一遍的话，写入量是文件数的平方：
+                // 一万个文件累计写盘约 13 GB。交给 400ms 的合并队列，
+                // 连着来的那些会并成一次。
+                //
+                // 掉最后 400ms 的记录不要紧：文件已经落在 Media 里了，
+                // 下次启动对账会把它收回来——磁盘才是真相，索引丢了能重建。
+                store.scheduleSaveFromServer()
             }
             return .ok(["saved": ok ? 1 : 0, "skipped": ok ? 0 : 1])
 
         case ("POST", "/api/upload"):
-            guard let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
-                  store.folder(folderID) != nil else {
-                return .error("目标目录不存在", status: 404)
+            guard let destination = destination(from: request) else {
+                return .error("目标不存在", status: 404)
             }
             guard let boundary = Multipart.boundary(from: request.contentType) else {
                 return .error("请求格式不正确")
@@ -245,7 +293,7 @@ final class WiFiService {
 
                 for part in parts where part.fileName != nil && part.byteCount > 0 {
                     let name = part.fileName ?? ""
-                    let target = resolveFolder(for: name, under: folderID)
+                    guard let target = resolveFolder(for: name, at: destination) else { skipped += 1; continue }
                     if isVideoName(name) {
                         if await store.addVideo(from: part.fileURL, to: target, name: name) != nil { saved += 1 }
                         else { skipped += 1 }
@@ -267,7 +315,7 @@ final class WiFiService {
                     // 按它逐级建目录，把原来的层级原样搬过来，
                     // 而不是把里面的文件全抖到当前目录
                     let name = part.fileName ?? ""
-                    let target = resolveFolder(for: name, under: folderID)
+                    guard let target = resolveFolder(for: name, at: destination) else { skipped += 1; continue }
 
                     // 这条路也要认视频。小于落盘阈值的请求体走内存解析，
                     // 之前这里一律当图片喂给 ImageProbe，于是几 MB 的短视频
@@ -292,8 +340,11 @@ final class WiFiService {
             }
             if saved > 0 {
                 receivedCount += saved
-                let folderName = store.folder(folderID)?.name ?? "目录"
-                note("收到 \(saved) 张图片 → \(folderName)")
+                // 一批里的文件可能被相对路径分到好几个目录，报最上面那个就够了
+                let where_ = destination.parent.flatMap { store.folder($0)?.name }
+                    ?? store.groups.first { $0.id == destination.group }?.name
+                    ?? "目录"
+                note("收到 \(saved) 个文件 → \(where_)")
                 store.saveNow()
             }
             return .ok(["saved": saved, "skipped": skipped])
@@ -309,23 +360,48 @@ final class WiFiService {
 
     private func isVideoName(_ name: String) -> Bool { MediaFormats.isVideo(fileName: name) }
 
+    /// 上传落到哪儿。目录页给的是目录，分组页给的是分组。
+    struct Destination {
+        var group: UUID
+        /// 从分组页拖进来时没有父目录，路径里的第一段就是要建的目录
+        var parent: UUID?
+    }
+
+    /// 从请求参数里认出目标。folder 优先，没有就看 group。
+    private func destination(from request: HTTPRequest) -> Destination? {
+        if let folderID = request.query["folder"].flatMap(UUID.init(uuidString:)),
+           store.folder(folderID) != nil,
+           let groupID = store.groupID(containing: folderID) {
+            return Destination(group: groupID, parent: folderID)
+        }
+        if let groupID = request.query["group"].flatMap(UUID.init(uuidString:)),
+           store.groups.contains(where: { $0.id == groupID }) {
+            return Destination(group: groupID, parent: nil)
+        }
+        return nil
+    }
+
     /// 按上传文件名里的相对路径找到（必要时创建）真正要落的目录。
     ///
     /// 浏览器不会把路径塞进 filename，是网页那边自己拼进去的，
     /// 所以这里要当成不可信输入处理：跳过 . 和 ..，砍掉过深的层级。
-    private func resolveFolder(for fileName: String, under root: UUID) -> UUID {
+    ///
+    /// 从分组页拖一整个文件夹进来时没有父目录，路径里的第一段就是要建的目录。
+    /// 这时候要是连一段路径都没有（散文件直接拖到分组上），得有个地方装，
+    /// 收进「未分类」——和「导入」文件夹那条路的规矩一致。
+    private func resolveFolder(for fileName: String, at destination: Destination) -> UUID? {
         let parts = fileName.split(separator: "/").map(String.init)
-        guard parts.count > 1, let groupID = store.groupID(containing: root) else { return root }
+        var current = destination.parent
 
-        var current = root
         // 最后一段是文件名本身，不建目录
         for raw in parts.dropLast().prefix(8) {
             let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, name != ".", name != ".." else { continue }
-            guard let next = store.folder(named: name, under: current, in: groupID) else { break }
+            guard let next = store.folder(named: name, under: current, in: destination.group) else { break }
             current = next.id
         }
-        return current
+        if let current { return current }
+        return store.folder(named: "未分类", under: nil, in: destination.group)?.id
     }
 
     // MARK: JSON
