@@ -619,7 +619,10 @@ final class LibraryStore {
         library.groups[gi].folders[fi].dirName = name
     }
 
-    /// 摘掉文件已经不在磁盘上的记录，返回摘掉几条
+    /// 摘掉文件已经不在磁盘上的记录，返回摘掉几条。
+    ///
+    /// 视频封面是单独落盘的（Posters/<资产 id>.jpg），记录摘了它不会自己消失，
+    /// 得一起删——不然在访达里删几百个视频，Posters 里就留几百张没人认领的图。
     func removeAssets(notIn existing: Set<String>) -> Int {
         var removed = 0
         for gi in library.groups.indices {
@@ -627,13 +630,31 @@ final class LibraryStore {
                 let before = library.groups[gi].folders[fi].assets.count
                 library.groups[gi].folders[fi].assets.removeAll { asset in
                     let gone = !existing.contains(asset.fileName.lowercased())
-                    if gone { ThumbnailCache.shared.invalidate(asset.id) }
+                    if gone {
+                        ThumbnailCache.shared.invalidate(asset.id)
+                        if asset.isVideo {
+                            try? FileManager.default.removeItem(at: Paths.poster(for: asset.id))
+                        }
+                    }
                     return gone
                 }
                 removed += before - library.groups[gi].folders[fi].assets.count
             }
         }
         return removed
+    }
+
+    /// Posters 里所有还认得出主人的封面
+    var livePosterNames: Set<String> {
+        var names: Set<String> = []
+        for group in library.groups {
+            for folder in group.folders {
+                for asset in folder.assets where asset.isVideo {
+                    names.insert("\(asset.id.uuidString).jpg")
+                }
+            }
+        }
+        return names
     }
 
     private func removeFile(_ asset: Asset) {

@@ -51,8 +51,21 @@ extension LibraryStore {
         // 在列表里显示成一块灰。所以跟着删。
         let removed = removeAssets(notIn: Set(onDisk.keys.map { $0.lowercased() }))
 
+        // 顺手把没人认领的封面清了。摘记录时已经删过对应的那张，这里是兜底：
+        // 早先的版本、以及删分组/删目录那几条路都可能漏下几张。
+        Self.sweepPosters(keeping: livePosterNames)
+
         if added > 0 || removed > 0 { saveNow() }
         return (added, removed)
+    }
+
+    /// Posters 里认不出主人的封面一律清掉
+    nonisolated private static func sweepPosters(keeping live: Set<String>) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: Paths.posters.path) else { return }
+        for name in names where name.hasSuffix(".jpg") && !live.contains(name) {
+            try? fm.removeItem(at: Paths.posters.appendingPathComponent(name))
+        }
     }
 
     // MARK: 扫盘
