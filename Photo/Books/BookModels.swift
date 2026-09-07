@@ -192,10 +192,6 @@ struct Book: Identifiable, Codable, Hashable {
         return String(format: "已读 %.0f%%", progressRatio * 100)
     }
 
-    var currentChapterTitle: String {
-        guard chapters.indices.contains(progress.chapterIndex) else { return "" }
-        return chapters[progress.chapterIndex].title
-    }
 }
 
 // MARK: - 阅读设置
