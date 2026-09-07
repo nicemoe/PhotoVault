@@ -106,9 +106,28 @@ final class ThumbnailCache: @unchecked Sendable {
         return Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel)
     }
 
+    /// 统一按这个尺寸抽封面，各处再各自降采样，避免同一个视频抽好几遍
+    private static let posterSide = 720
+
     /// 盘上抽好的那张封面。没有就返回 nil，交给 extractPoster 去抽。
+    ///
+    /// 判断「够不够大」要看**能拿到的上限**，不是看要多大。封面一律按 720 抽，
+    /// 而且 AVAssetImageGenerator 的 maximumSize 只缩不放——所以一个视频的封面
+    /// 最大就是 min(720, 视频本身的长边)。到了这个数就已经是最好的了，
+    /// 再抽一次拿到的还是同一张。
+    ///
+    /// 原来这里直接拿「要多大」去比，于是两种情况永远不达标、每次都重抽：
+    ///
+    /// - 预览页要 900，封面只有 720。每打开一次视频就重抽一帧，
+    ///   抽完写下去还是 720，下次打开继续重抽。
+    /// - 低分辨率的片子，比如 320p 的，封面永远是 320，而列表要 420。
+    ///   每滑过它一次就重抽一次，永远进不了那条便宜路。
     private func posterOnDisk(for asset: Asset, maxPixel: Int) -> UIImage? {
         let posterURL = LibraryStore.posterURL(for: asset.id)
+        // 这个视频的封面最大能有多大
+        let sourceSide = max(asset.width, asset.height)
+        let best = sourceSide > 0 ? min(Self.posterSide, sourceSide) : Self.posterSide
+        let wanted = min(maxPixel, best)
 
         // 先只问尺寸，别把整张解出来。
         //
@@ -121,8 +140,8 @@ final class ThumbnailCache: @unchecked Sendable {
            let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = props[kCGImagePropertyPixelWidth] as? Int,
            let height = props[kCGImagePropertyPixelHeight] as? Int,
-           // 存的那张比要的还小就不能用，宁可重抽一次
-           max(width, height) >= maxPixel - 1,
+           // 到不了这个数才是真的不能用，那种多半是老版本留下的小图
+           max(width, height) >= wanted - 1,
            let image = Self.downsample(source: source, maxPixel: maxPixel) {
             return image
         }
@@ -140,15 +159,15 @@ final class ThumbnailCache: @unchecked Sendable {
         if let ready = posterOnDisk(for: asset, maxPixel: maxPixel) { return ready }
 
         let posterURL = LibraryStore.posterURL(for: asset.id)
-        // 统一按一个较大的尺寸抽，各处再各自降采样，避免同一个视频抽好几遍
-        let posterSide = 720
         guard let full = await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
-                                                 maxPixel: posterSide) else { return nil }
-        if let jpeg = full.jpegData(compressionQuality: 0.82) {
-            try? jpeg.write(to: posterURL, options: .atomic)
-            return Self.downsample(data: jpeg, maxPixel: maxPixel) ?? full
-        }
-        return full
+                                                 maxPixel: Self.posterSide) else { return nil }
+        guard let jpeg = full.jpegData(compressionQuality: 0.82) else { return full }
+        try? jpeg.write(to: posterURL, options: .atomic)
+
+        // 要的比抽出来的还大就直接给原图。再 downsample 一次是把刚编码的 JPEG
+        // 解回来放大，白解一遍还更糊。
+        guard maxPixel < Int(max(full.size.width, full.size.height)) else { return full }
+        return Self.downsample(data: jpeg, maxPixel: maxPixel) ?? full
     }
 
     /// 服务端用：直接拿到 JPEG 数据。
