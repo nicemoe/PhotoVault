@@ -231,6 +231,101 @@ final class ThumbnailCache: @unchecked Sendable {
         lock.unlock()
     }
 
+    // MARK: 拼贴
+
+    /// 把几张图拼成一张，拼好的整张进缓存。
+    ///
+    /// 四宫格卡在**渲染**上，不是解码上：图早就在内存里了，滑动还是顿。
+    /// 一个格子四张图就是四套图层、四次裁剪，还套在外面那层圆角裁剪里；
+    /// 而 LazyVGrid 每滑出一行要一次性把整行的格子全建出来，那一帧的活
+    /// 就是四倍。换成单图就顺，差别全在这儿。
+    ///
+    /// 所以别让它在渲染时拼。后台画成一张位图，格子里就一张图，
+    /// 和单图一样轻，四宫格的样子还留着。
+    ///
+    /// 缓存键带上这几张图的 id：目录里进了新东西、封面换人了，键就变了，
+    /// 自然会重拼一张。
+    func collage(of assets: [Asset], side: CGFloat, gap: CGFloat, scale: CGFloat) async -> UIImage? {
+        let picked = Array(assets.prefix(4))
+        guard !picked.isEmpty, side > 1 else { return nil }
+
+        let key = "collage@\(Int(side)):" + picked.map(\.id.uuidString).joined(separator: ",")
+        if let hit = cache.object(forKey: key as NSString) { return hit }
+
+        // 每一格还是走原来那条路：内存缓存、限流、该抽帧就抽帧，全在里面。
+        // 四张都齐了才拼——缺一张就先不画，等下一次。整张卡片一起出现，
+        // 比一格一格往外冒好看。
+        // 每格实际占多大就要多大。四宫格一格只占一半，按整张卡的分辨率去解
+        // 就是四倍的像素白解。
+        let tilePixels = Int((picked.count > 1 ? side / 2 : side) * scale)
+
+        var tiles: [UIImage] = []
+        for asset in picked {
+            guard !Task.isCancelled else { return nil }
+            guard let tile = await thumbnail(for: asset, maxPixel: tilePixels) else { break }
+            tiles.append(tile)
+        }
+        guard tiles.count == picked.count else { return nil }
+
+        let made = Self.compose(tiles, side: side, gap: gap, scale: scale)
+        let cost = Int(side * side * scale * scale * 4)
+        cache.setObject(made, forKey: key as NSString, cost: cost)
+        // 目录封面不跟着某一个 asset 走，invalidate 那套按 id 索引的表就不登记了。
+        // 它会随着缓存自己的淘汰规则走，而且键里带着 id，换了人自然作废。
+        return made
+    }
+
+    private static func compose(_ tiles: [UIImage], side: CGFloat,
+                                gap: CGFloat, scale: CGFloat) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        // 不透明会把缝隙涂成黑的。留透明，缝隙交给底下的 SwiftUI 背景色，
+        // 这样浅色深色都对——位图是当场画的，烘不进主题色。
+        format.opaque = false
+
+        let size = CGSize(width: side, height: side)
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            for (tile, rect) in zip(tiles, Self.tileFrames(count: tiles.count, side: side, gap: gap)) {
+                Self.drawFilling(tile, in: rect)
+            }
+        }
+    }
+
+    /// 每一格摆在哪儿。和原来那套 SwiftUI 布局一一对应。
+    private static func tileFrames(count: Int, side: CGFloat, gap: CGFloat) -> [CGRect] {
+        let half = (side - gap) / 2
+        switch count {
+        case 1:
+            return [CGRect(x: 0, y: 0, width: side, height: side)]
+        case 2:
+            return [CGRect(x: 0, y: 0, width: half, height: side),
+                    CGRect(x: half + gap, y: 0, width: half, height: side)]
+        case 3:
+            return [CGRect(x: 0, y: 0, width: half, height: side),
+                    CGRect(x: half + gap, y: 0, width: half, height: half),
+                    CGRect(x: half + gap, y: half + gap, width: half, height: half)]
+        default:
+            return [CGRect(x: 0, y: 0, width: half, height: half),
+                    CGRect(x: half + gap, y: 0, width: half, height: half),
+                    CGRect(x: 0, y: half + gap, width: half, height: half),
+                    CGRect(x: half + gap, y: half + gap, width: half, height: half)]
+        }
+    }
+
+    /// 按 aspect fill 画进这一格：铺满，多出来的裁掉。
+    private static func drawFilling(_ image: UIImage, in rect: CGRect) {
+        let w = image.size.width, h = image.size.height
+        guard w > 0, h > 0, let ctx = UIGraphicsGetCurrentContext() else { return }
+        let ratio = max(rect.width / w, rect.height / h)
+        let filled = CGSize(width: w * ratio, height: h * ratio)
+        ctx.saveGState()
+        ctx.clip(to: rect)
+        image.draw(in: CGRect(x: rect.midX - filled.width / 2,
+                              y: rect.midY - filled.height / 2,
+                              width: filled.width, height: filled.height))
+        ctx.restoreGState()
+    }
+
     // MARK: 降采样
 
     static func downsample(url: URL, maxPixel: Int) -> UIImage? {

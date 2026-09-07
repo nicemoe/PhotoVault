@@ -142,69 +142,66 @@ struct AssetImage: View {
 
 struct CoverCollage: View {
     let assets: [Asset]
+    /// 画多大。拼贴是当场画成一张位图的，得知道尺寸；
+    /// 而这个数外面本来就按列宽算好了（CardGridLayout.side）。
+    let side: CGFloat
     var tint: Color = Theme.accent
     var emptyIcon: String = "photo.on.rectangle.angled"
-    var maxPixel: Int = 480
+
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: UIImage?
 
     private let gap: CGFloat = 2
 
-    /// 不用 GeometryReader。
+    /// 几张图在后台拼成一张，这里只画那一张。
     ///
-    /// 原来整个拼贴套在 GeometryReader 里，靠量出来的宽高算每一格的尺寸。
-    /// 在 LazyVGrid 里这是笔白付的开销：GeometryReader 不给子视图提议尺寸，
-    /// 父容器得再走一轮布局才定得下来，而目录网格每滑出一行就要新建一批格子，
-    /// 每个格子都付一次。资产网格一个格子就一张图、没有 GeometryReader，
-    /// 所以滑起来顺——「目录那层卡、点进去看视频不卡」的差别就在这儿。
+    /// 原来是四个 AssetImage 摆成田字格，靠 SwiftUI 布局拼。问题是这一层
+    /// 卡在**渲染**上而不是解码上——图早就在内存里了，滑动照样顿：一个格子
+    /// 四张图就是四套图层、四次裁剪，还套在外面那层圆角裁剪里，而 LazyVGrid
+    /// 每滑出一行要一次性把整行的格子全建出来，那一帧的活是四倍。
+    /// 换成单图立刻就顺，差别全在这儿。
     ///
-    /// 外面已经用 aspectRatio 把容器摁成正方形了，里面要的只是「均分」，
-    /// 交给 maxWidth / maxHeight: .infinity 就够，不需要知道具体多少点。
+    /// 拼贴本来就是张不会动的图，没道理每次滑过都在渲染管线里重拼一遍。
+    /// 后台画成一张位图缓存起来，格子里就一张图，和单图一样轻，
+    /// 四宫格的样子还留着。
     var body: some View {
-        Group {
-            switch assets.count {
-            case 0:
-                Image(systemName: emptyIcon)
-                    .resizable()
-                    .scaledToFit()
-                    // 相当于原来那句「边长的 26%」，只是不用去问边长
-                    .scaleEffect(0.3)
-                    .foregroundStyle(tint.opacity(0.55))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(tint.opacity(0.12))
-            case 1:
-                AssetImage(asset: assets[0], maxPixel: maxPixel)
-            case 2:
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(maxWidth: .infinity)
-                    AssetImage(asset: assets[1], maxPixel: maxPixel).frame(maxWidth: .infinity)
-                }
-            case 3:
-                // 原来大图占 62%，那个比例非得量出宽度才算得了。
-                // 改成对半分：省掉那轮布局，看着也更规整。
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel)
-                        .frame(maxWidth: .infinity)
-                    VStack(spacing: gap) {
-                        AssetImage(asset: assets[1], maxPixel: 256).frame(maxHeight: .infinity)
-                        AssetImage(asset: assets[2], maxPixel: 256).frame(maxHeight: .infinity)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            default:
-                VStack(spacing: gap) {
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[0], maxPixel: 256).frame(maxWidth: .infinity)
-                        AssetImage(asset: assets[1], maxPixel: 256).frame(maxWidth: .infinity)
-                    }
-                    .frame(maxHeight: .infinity)
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[2], maxPixel: 256).frame(maxWidth: .infinity)
-                        AssetImage(asset: assets[3], maxPixel: 256).frame(maxWidth: .infinity)
-                    }
-                    .frame(maxHeight: .infinity)
+        Theme.fill
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else if assets.isEmpty {
+                    Image(systemName: emptyIcon)
+                        .resizable()
+                        .scaledToFit()
+                        // 相当于原来那句「边长的 26%」，只是不用去问边长
+                        .scaleEffect(0.3)
+                        .foregroundStyle(tint.opacity(0.55))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(tint.opacity(0.12))
                 }
             }
-        }
-        .background(Theme.fill)
+            .clipped()
+            .task(id: cacheKey) {
+                guard !assets.isEmpty else {
+                    if image != nil { image = nil }
+                    return
+                }
+                let made = await ThumbnailCache.shared.collage(
+                    of: assets, side: side, gap: gap, scale: displayScale)
+                guard !Task.isCancelled else { return }
+                if image == nil {
+                    withAnimation(.easeOut(duration: 0.18)) { image = made }
+                } else {
+                    image = made
+                }
+            }
+    }
+
+    /// 换了图、换了尺寸都要重拼
+    private var cacheKey: String {
+        assets.prefix(4).map(\.id.uuidString).joined(separator: ",") + "@\(Int(side))"
     }
 }
 
@@ -216,7 +213,8 @@ struct GroupCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: group.coverAssets, tint: Theme.color(at: group.colorIndex))
+            CoverCollage(assets: group.coverAssets, side: side,
+                             tint: Theme.color(at: group.colorIndex))
                 .frame(maxWidth: .infinity)
                 // 高度直接给死，不靠 aspectRatio 去谈。
                 //
@@ -307,7 +305,7 @@ struct FolderCard: View {
                 // （开解码器解一帧，一百到三百毫秒）。那一步挪到后台提前做完了
                 // （见 backfillPosters），这里剩下的就是四次读盘解图，
                 // 和一张图差不了多少。
-                CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
+                CoverCollage(assets: summary.covers, side: side, tint: tint, emptyIcon: "folder")
                     .frame(maxWidth: .infinity)
                     // 高度直接给死，不靠 aspectRatio 去谈。
                     //
