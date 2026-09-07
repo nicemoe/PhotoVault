@@ -168,6 +168,8 @@ final class BookLibrary {
         guard let index = try? Coders.makeDecoder().decode(BookIndex.self, from: data) else {
             let stamp = ISO8601DateFormatter().string(from: Date())
                 .replacingOccurrences(of: ":", with: "-")
+            // 索引平时是锁住的，挪走之前得先摘锁
+            LockedFile.unlock(BookPaths.indexFile)
             try? FileManager.default.moveItem(
                 at: BookPaths.indexFile,
                 to: Paths.documents.appendingPathComponent("books.损坏-\(stamp).json"))
@@ -199,7 +201,7 @@ final class BookLibrary {
 
     private nonisolated static func write(_ snapshot: BookIndex) async {
         guard let data = try? Coders.makeEncoder().encode(snapshot) else { return }
-        try? data.write(to: BookPaths.indexFile, options: .atomic)
+        LockedFile.write(data, to: BookPaths.indexFile)
     }
 
     // MARK: 查询

@@ -178,8 +178,13 @@ struct BookshelfView: View {
         // 常驻监听目录只会白耗电。
         .task { await collectLooseFiles() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await collectLooseFiles() }
+            if phase == .active {
+                Task { await collectLooseFiles() }
+            } else {
+                // 退到后台之后人很可能直接上划把 App 杀了。翻页时的保存是
+                // 攒 300ms 一起写的，不趁这一下落盘，最后翻的那几页就没了。
+                library.saveNow()
+            }
         }
     }
 
