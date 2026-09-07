@@ -1,6 +1,35 @@
 import UIKit
 import ImageIO
 
+/// 同时最多让几张图在解码。
+///
+/// 一个简单的异步信号量。拿不到名额的挂在 waiting 里，前面的人做完再放行。
+actor DecodeGate {
+
+    private let limit: Int
+    private var running = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.limit = limit }
+
+    func enter() async {
+        if running < limit {
+            running += 1
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func leave() {
+        // 有人在排队就直接把名额交给他，running 不用动
+        if waiting.isEmpty {
+            running -= 1
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+}
+
 /// 缩略图生成 + 内存缓存。线程安全，App 与 WiFi 服务端共用。
 final class ThumbnailCache: @unchecked Sendable {
 
@@ -27,23 +56,45 @@ final class ThumbnailCache: @unchecked Sendable {
         cache.object(forKey: key(asset.id, maxPixel) as NSString)
     }
 
-    /// 异步生成缩略图
+    /// 异步生成缩略图。
+    ///
+    /// 排队做，一次最多三张。
+    ///
+    /// 一屏目录卡片能同时挂起四五十张缩略图，每张都是一次全尺寸 JPEG 解码，
+    /// 几十毫秒起步。原来是一人一个 Task.detached 全放出去，CPU 被塞满，
+    /// 主线程连排版都排不上——点进分组、往下滑的那种一顿一顿就是这么来的。
+    ///
+    /// 更要命的是 detached 任务不继承取消。格子划出屏幕时 SwiftUI 会把
+    /// .task 取消掉，但里面那个 detached 照样跑完。快速划过两百个目录，
+    /// 就是八百次没人要的解码还在排着队，把后面真正在屏幕上的那些堵在后面。
+    ///
+    /// 改成不开新任务、直接在这条任务链上做：取消就传得下来，排到自己时
+    /// 先看一眼还要不要，不要就跳过。三个名额是拍的——够喂饱屏幕，
+    /// 又不至于把 CPU 占光。
     func thumbnail(for asset: Asset, maxPixel: Int) async -> UIImage? {
         if let hit = cached(asset, maxPixel: maxPixel) { return hit }
 
-        let id = asset.id
-        let image: UIImage?
-        if asset.isVideo {
-            image = await videoPoster(for: asset, maxPixel: maxPixel)
-        } else {
-            let url = LibraryStore.fileURL(for: asset)
-            image = await Task.detached(priority: .userInitiated) {
-                Self.downsample(url: url, maxPixel: maxPixel)
-            }.value
-        }
+        await Self.gate.enter()
+        let image = await generate(asset, maxPixel: maxPixel)
+        await Self.gate.leave()
+
         guard let image else { return nil }
-        store(image, id: id, maxPixel: maxPixel)
+        store(image, id: asset.id, maxPixel: maxPixel)
         return image
+    }
+
+    private static let gate = DecodeGate(limit: 3)
+
+    private func generate(_ asset: Asset, maxPixel: Int) async -> UIImage? {
+        // 排队的这段时间里格子可能已经划走了，别做这份白工
+        guard !Task.isCancelled else { return nil }
+        // 也可能别人已经把同一张生成好了
+        if let hit = cached(asset, maxPixel: maxPixel) { return hit }
+
+        if asset.isVideo { return await videoPoster(for: asset, maxPixel: maxPixel) }
+        // 这个方法本身就不在主线程上（nonisolated 的 async 一定跑在协作线程池里），
+        // 不用再开一层任务——开了反而把取消断在这儿。
+        return Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel)
     }
 
     /// 视频封面：先看磁盘上有没有抽好的，没有再抽一帧存下来。
