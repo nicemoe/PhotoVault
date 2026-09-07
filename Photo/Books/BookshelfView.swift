@@ -183,14 +183,17 @@ struct BookshelfView: View {
         }
     }
 
-    /// 和 Local 对一次账：新丢进来的收走，原文件被删掉的那些书也跟着走
+    /// 和书库对一次账：新丢进来的收走，文件被删掉的那些书也跟着走，
+    /// 在电脑上改过的重新拆一遍
     private func collectLooseFiles() async {
         let saved = await library.importLooseFiles()
         let gone = library.pruneMissingSources()
-        guard saved > 0 || gone > 0 else { return }
+        let redone = await library.refreshEdited()
+        guard saved > 0 || gone > 0 || redone > 0 else { return }
 
         let parts = [saved > 0 ? "收进 \(saved) 本" : nil,
-                     gone > 0 ? "移除 \(gone) 本" : nil].compactMap { $0 }
+                     gone > 0 ? "移除 \(gone) 本" : nil,
+                     redone > 0 ? "重拆 \(redone) 本" : nil].compactMap { $0 }
         toastItem = Toast(icon: "arrow.triangle.2.circlepath",
                           text: parts.joined(separator: "，"))
     }

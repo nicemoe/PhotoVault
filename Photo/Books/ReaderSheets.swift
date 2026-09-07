@@ -201,7 +201,7 @@ struct BookSearchSheet: View {
         searching = true
         searched = true
         Task {
-            let found = await library.search(dirName: book.dirName, chapters: book.chapters, keyword: key)
+            let found = await library.search(fileName: book.sourceName, chapters: book.chapters, keyword: key)
             hits = found
             searching = false
         }

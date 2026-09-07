@@ -4,78 +4,56 @@ import Observation
 /// 书在磁盘上怎么摆。
 ///
 ///     Documents/
-///       Local/                     ← 原文件。丢书进这里，导出也从这里拿
-///         斗破苍穹.txt
-///       Books/                     ← 拆好的，App 读这里
-///         斗破苍穹/0001 第一章 风起.txt
-///       books.json
+///       Books/
+///         斗破苍穹.txt          ← 一本书就一个文件，UTF-8
+///         三体.txt
+///       books.json              ← 每章：标题 + 起始字节 + 长度
 ///
-/// 原文件留着不是为了占地方：能原样导出、分章逻辑以后改进了能拿它重拆、
-/// 章节文件坏了也能重建。代价是占用翻倍，一本三兆的长篇变成六兆。
+/// 一本书一个文件，不再按章拆成几百个小文件。
 ///
-/// 「哪些书是新的」也因此变成一件确定的事：拿索引里的 sourceName 和
-/// Local 里的文件对一遍，多出来的就是新拖进来的。
+/// 拆成小文件的理由本来是「排版和内存要按章来」，但那只要求*读*的时候
+/// 一章一章读，不要求*存*的时候一章一个文件。改成记字节范围之后，读一章
+/// 就是 seek 到偏移读一段，一样按需，代价却小得多：一千本书从五十万个
+/// 文件变成一千个。之前「导入解析很久」和那次启动看门狗闪退，大头就是
+/// 这五十万次文件系统调用。
+///
+/// 编码在导入那一刻就统一成 UTF-8 了。GBK 也好、epub 也好，都只是文件
+/// 从哪儿下载来的痕迹，不是想要的形态——收进来的时候一次收拾干净，
+/// 后面所有偏移都指着同一种编码，不用再判断。
 enum BookPaths {
 
-    /// 原文件
-    static let library: URL = {
-        let url = Paths.documents.appendingPathComponent("Local", isDirectory: true)
+    static let root: URL = {
+        let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
-        // 放一份说明。用 .md，不在收书的后缀里，不会把自己当成一本书导进去。
+        // 放一份说明。用 .md，不在收书的后缀里，不会把自己当成一本书收进去。
         let readme = url.appendingPathComponent("使用说明.md")
         if !FileManager.default.fileExists(atPath: readme.path) {
             let text = """
-            # Local —— 原文件
+            # 书库
 
-            把 TXT 或 EPUB 丢进这个文件夹，回到 App 就会自动收进书架。
-            整个文件夹丢进来也行，里面的书会被翻出来。
+            一本书 = 一个 UTF-8 的 txt 文件。想加书就直接丢进这个文件夹，
+            回到 App 就会自动收进书架；整个文件夹丢进来也行，里面的书会被
+            拿出来平铺到这一层。
 
-            **原文件会一直留在这儿**，随时可以拷回电脑。App 读的是隔壁
-            Books 文件夹里拆好的那份，那份是从这里生成的。
+            收进来的时候会做两件事，之后这个文件就是最终形态：
+
+            - **编码统一转成 UTF-8**。GBK 的会就地转掉，原来那份不留——
+              那只是从别处下载时碰巧带的编码，不是你要的东西。
+            - **EPUB 会被抽成 txt，原来的 .epub 删掉**。同理。
+
+            在这里删掉某本书的 txt，App 里那本也会跟着消失；
+            在 App 里删书，这里的文件也会被删。
             """
             try? Data(text.utf8).write(to: readme, options: .atomic)
         }
         return url
     }()
 
-    /// 拆好的章节
-    static let chapters: URL = {
-        let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }()
-
     static let indexFile = Paths.documents.appendingPathComponent("books.json")
 
-    static func directory(named dirName: String) -> URL {
-        chapters.appendingPathComponent(dirName, isDirectory: true)
-    }
-
-    /// 每章单独一个文件。整本读进内存的话，一部几百万字的长篇会直接把 App 撑爆。
-    ///
-    /// 名字是「四位序号 + 章节名」。序号是补零的，一来在访达里按名字排就是
-    /// 正确的顺序，二来它天然唯一——一本书里叫「第一章」的可能不止一处，
-    /// 光靠章节名会撞，加了序号就不用再存一份文件名进索引。
-    static func chapterName(index: Int, title: String) -> String {
-        let clean = FileNames.sanitize(title, limit: 60)
-        return String(format: "%04d", index + 1) + " " + clean + ".txt"
-    }
-
-    static func chapterFile(dirName: String, index: Int, title: String) -> URL {
-        directory(named: dirName).appendingPathComponent(chapterName(index: index, title: title))
-    }
-
-    /// 老版本把索引也塞在 Books/ 里。章节本来就在 Books/，不用动，
-    /// 只把索引挪到 Documents 根下——一次 rename，放在启动路径上也不怕。
-    static func migrateLayout() {
-        let fm = FileManager.default
-        let oldIndex = Paths.documents
-            .appendingPathComponent("Books", isDirectory: true)
-            .appendingPathComponent("books.json")
-        guard fm.fileExists(atPath: oldIndex.path),
-              !fm.fileExists(atPath: indexFile.path) else { return }
-        try? fm.moveItem(at: oldIndex, to: indexFile)
+    static func file(named name: String) -> URL {
+        root.appendingPathComponent(name)
     }
 }
 
@@ -166,11 +144,10 @@ final class BookLibrary {
     /// nil 表示没有在导入
     private(set) var importing: ImportProgress?
 
-    /// 正在扫 Local。挡住重入，见 importLooseFiles。
+    /// 正在扫书库。挡住重入，见 importLooseFiles。
     private var isScanning = false
 
     init() {
-        BookPaths.migrateLayout()
         load()
     }
 
@@ -224,16 +201,28 @@ final class BookLibrary {
     /// 按需读某一章的正文。
     ///
     /// 真正干活的是下面那个 nonisolated 版本：全文搜索要在后台跑，
-    /// 读不到 @MainActor 的 books，所以由调用方先把目录名和章节信息取出来。
+    /// 读不到 @MainActor 的 books，所以由调用方先把文件名和章节信息取出来。
     func chapterText(bookID: UUID, index: Int) -> String {
         guard let book = book(bookID), book.chapters.indices.contains(index) else { return "" }
-        return Self.chapterText(dirName: book.dirName, chapter: book.chapters[index])
+        return Self.chapterText(fileName: book.sourceName, chapter: book.chapters[index])
     }
 
-    nonisolated static func chapterText(dirName: String, chapter: ChapterMeta) -> String {
-        let url = BookPaths.chapterFile(dirName: dirName, index: chapter.index, title: chapter.title)
-        guard let data = try? Data(contentsOf: url) else { return "" }
-        return String(decoding: data, as: UTF8.self)
+    /// seek 到偏移，读这一章那几万字节，解成字符串。
+    ///
+    /// 整本书都在一个文件里，但读的时候只碰这一段——按需的粒度没变，
+    /// 变的只是「一章一个文件」换成了「一个文件里的一段」。
+    /// 偏移是导入时按 UTF-8 编码算出来的，天然落在字符边界上。
+    nonisolated static func chapterText(fileName: String, chapter: ChapterMeta) -> String {
+        guard !fileName.isEmpty, chapter.byteLength > 0 else { return "" }
+        guard let handle = try? FileHandle(forReadingFrom: BookPaths.file(named: fileName)) else { return "" }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: UInt64(chapter.byteOffset))
+            guard let data = try handle.read(upToCount: chapter.byteLength) else { return "" }
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return ""
+        }
     }
 
     // MARK: 导入
@@ -292,50 +281,29 @@ final class BookLibrary {
 
         guard !parsed.chapters.isEmpty else { throw ImportError.empty }
 
-        // 落盘：每章一个文件。整批导入时这一步才是大头，不是正则分章，
-        // 所以三件事都要注意：目录只建一次、不走 atomic、别占着主线程。
-        let bookID = UUID()
+        // 落盘：整本拼成一个 UTF-8 文件，章节只在索引里记字节范围。
+        //
+        // 原来是每章一个文件，一本 500 章的书就是 500 次写盘、500 次建目录；
+        // 一次导一千本，光文件系统调用就几十万次——之前「解析很久」和那次
+        // 启动看门狗闪退，大头都在这儿。现在一本书一次写盘。
         let chapters = parsed.chapters
-        let dirName = FileNames.unique(FileNames.sanitize(parsed.title),
-                                       taken: Set(books.map(\.dirName)))
+        let stem = FileNames.unique(
+            FileNames.sanitize(parsed.title),
+            taken: Set(books.map { ($0.sourceName as NSString).deletingPathExtension }))
 
-        let (metas, total) = await Task.detached(priority: .userInitiated) {
-            () -> ([ChapterMeta], Int) in
-            // 目录建一次就够。原来每章都通过 chapterFile() 走一遍 directory()，
-            // 而它里面有 createDirectory —— 一本 500 章的书就是 500 次多余的
-            // 系统调用，一次导入上千本时这笔账很吓人。
-            let dir = BookPaths.directory(named: dirName)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-            var metas: [ChapterMeta] = []
-            var total = 0
-            for (i, chapter) in chapters.enumerated() {
-                let body = chapter.body
-                // 不用 .atomic。索引是在全部章节写完之后才写的，中途被杀只会
-                // 留下一堆没人引用的孤儿文件，不会产生半本坏书；而 atomic 要
-                // 先写临时文件再 rename，每章多一倍的文件系统操作。
-                let name = BookPaths.chapterName(index: i, title: chapter.title)
-                try? Data(body.utf8).write(to: dir.appendingPathComponent(name))
-                metas.append(ChapterMeta(index: i, title: chapter.title,
-                                         characterCount: body.count))
-                total += body.count
-            }
-            return (metas, total)
+        let built = await Task.detached(priority: .userInitiated) {
+            () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
+            Self.writeText(chapters: chapters, stem: stem, replacing: url)
         }.value
+        guard let built else { throw ImportError.empty }
 
-        // 原文件留一份在 Local 里：能原样导出，分章逻辑以后改进了还能拿它重拆
-        let sourceName = await Task.detached(priority: .utility) {
-            Self.keepSource(url)
-        }.value
-
-        let book = Book(id: bookID,
-                        title: parsed.title,
-                        dirName: dirName,
-                        sourceName: sourceName,
+        let book = Book(title: parsed.title,
+                        sourceName: built.name,
+                        textBytes: built.bytes,
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
-                        chapters: metas,
-                        totalCharacters: total,
+                        chapters: built.metas,
+                        totalCharacters: built.characters,
                         colorIndex: abs(parsed.title.hashValue) % Theme.paletteHex.count)
 
         books.append(book)
@@ -361,14 +329,9 @@ final class BookLibrary {
         return try await importBook(from: temp)
     }
 
-    /// 收走「导入」文件夹里的书。App 一进前台就跑一次。
-    ///
-    /// 导进来之后删掉原文件：内容已经拆成章存到 App 自己的目录里了，
-    /// 留着只会让人以为还没导，下次进前台又导一遍。
-    /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
-    @discardableResult
     /// 一次导一批。总数先摆出来，进度浮层才有「几分之几」可显示——
     /// 一次选一百本却只看到「正在解析《某某》」，人不知道还要等多久。
+    @discardableResult
     func importBooks(from urls: [URL]) async -> (ok: Int, failures: [String]) {
         guard !urls.isEmpty else { return (0, []) }
         importing = ImportProgress(done: 0, total: urls.count, title: "")
@@ -388,10 +351,10 @@ final class BookLibrary {
         return (ok, failures)
     }
 
-    /// 收 Local 里还没收过的书。
+    /// 收书库里还没收过的书。
     ///
-    /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的原文件叫什么
-    /// （sourceName），Local 里对不上号的就是新拖进来的。不用比文件数——
+    /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的正文文件叫什么
+    /// （sourceName），书库里对不上号的就是新拖进来的。不用比文件数——
     /// 比数不可靠，删一个加一个数字还一样。
     func importLooseFiles() async -> Int {
         // 两个触发点（视图首次出现、从后台切回前台）可能挨着来。不挡一下的话
@@ -412,20 +375,83 @@ final class BookLibrary {
 
         var saved = 0
         for name in fresh.sorted() {
-            let url = BookPaths.library.appendingPathComponent(name)
+            let url = BookPaths.file(named: name)
             guard (try? await importBook(from: url)) != nil else { continue }
             saved += 1
         }
         return saved
     }
 
-    /// 原文件在 Local 里被删掉了，书也跟着走。
+    /// 在访达里改过的书，重新拆一遍。
     ///
-    /// Local 是源，章节是从它生成的：源没了，那堆章节文件就是一摞没人认领的
-    /// 碎片，书架上那本也打不开。
+    /// 章节记的是字节范围，而正文文件就摆在共享目录里，人随时能打开改两笔。
+    /// 一改，后面每一章的偏移就整体错位，而且是静悄悄地错——点开某一章，
+    /// 读出来是上一章的半句话。所以每次对账都拿文件大小校一下，对不上就重拆。
     ///
-    /// sourceName 是空串的跳过：那种书压根没记原文件是哪个，
-    /// 无从判断源还在不在，不能拿「找不到」当「被删了」。
+    /// 阅读进度和书签留着：那是人自己的东西，不是从文件生成的。章数变少了
+    /// 就把进度夹回范围内，总比整本回到第一页强。
+    @discardableResult
+    func refreshEdited() async -> Int {
+        // 和 importLooseFiles 共用一把锁：两个触发点挨着来的话，
+        // 后一次会看到前一次还没写回 textBytes 的书，白重拆一遍。
+        guard !isScanning else { return 0 }
+        isScanning = true
+        defer { isScanning = false }
+
+        let sizes = await Task.detached(priority: .utility) { Self.fileSizes() }.value
+        let stale: [(id: UUID, name: String)] = books.compactMap { book in
+            guard !book.sourceName.isEmpty, book.textBytes > 0,
+                  let size = sizes[book.sourceName.lowercased()],
+                  size != book.textBytes else { return nil }
+            return (book.id, book.sourceName)
+        }
+        guard !stale.isEmpty else { return 0 }
+
+        importing = ImportProgress(done: 0, total: stale.count, title: "")
+        defer { importing = nil }
+
+        var done = 0
+        for (id, name) in stale {
+            // 每轮都重新找一遍下标：这中间 await 过，books 可能已经变了
+            guard let i = books.firstIndex(where: { $0.id == id }),
+                  books[i].sourceName == name else { continue }
+            importing?.title = books[i].title
+
+            let built = await Task.detached(priority: .userInitiated) {
+                () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
+                let url = BookPaths.file(named: name)
+                guard let data = try? Data(contentsOf: url),
+                      let text = TextDecoding.decode(data) else { return nil }
+                let chapters = ChapterSplitter.split(text)
+                guard !chapters.isEmpty else { return nil }
+                return Self.writeText(chapters: chapters,
+                                      stem: (name as NSString).deletingPathExtension,
+                                      replacing: url)
+            }.value
+            importing?.done += 1
+
+            guard let built, let j = books.firstIndex(where: { $0.id == id }) else { continue }
+            books[j].sourceName = built.name
+            books[j].textBytes = built.bytes
+            books[j].chapters = built.metas
+            books[j].totalCharacters = built.characters
+            if books[j].progress.chapterIndex >= built.metas.count {
+                books[j].progress.chapterIndex = max(0, built.metas.count - 1)
+                books[j].progress.characterOffset = 0
+            }
+            done += 1
+        }
+        if done > 0 { saveNow() }
+        return done
+    }
+
+    /// 正文文件在书库里被删掉了，书也跟着走。
+    ///
+    /// 那个文件就是这本书本身，索引里存的偏移全指着它。文件没了，
+    /// 剩下的章节目录只是一堆指向空气的字节范围，点开是白的。
+    ///
+    /// sourceName 是空串的跳过：那种书压根没记文件是哪个，
+    /// 无从判断在不在，不能拿「找不到」当「被删了」。
     @discardableResult
     func pruneMissingSources() -> Int {
         let onDisk = Set(Self.scanLibrary().map { $0.lowercased() })
@@ -433,23 +459,21 @@ final class BookLibrary {
             && !onDisk.contains($0.sourceName.lowercased()) }
         guard !doomed.isEmpty else { return 0 }
 
-        for book in doomed where !book.dirName.isEmpty {
-            try? FileManager.default.removeItem(at: BookPaths.directory(named: book.dirName))
-        }
         let doomedIDs = Set(doomed.map(\.id))
         books.removeAll { doomedIDs.contains($0.id) }
         saveNow()
         return doomed.count
     }
 
-    /// Local 里所有能收的文件，返回相对 Local 的路径。
-    /// 子目录也翻——拖一整个文件夹进来是常事，而且保留人家的分类。
+    /// 书库里所有能收的文件，返回相对书库根的路径。
+    /// 子目录也翻——拖一整个文件夹进来是常事。收进来之后文件会被
+    /// 归到根上（见 writeText），所以子目录只是个入口，不是长期形态。
     nonisolated private static func scanLibrary() -> [String] {
         let fm = FileManager.default
-        guard let walker = fm.enumerator(at: BookPaths.library,
+        guard let walker = fm.enumerator(at: BookPaths.root,
                                          includingPropertiesForKeys: [.isRegularFileKey],
                                          options: [.skipsHiddenFiles]) else { return [] }
-        let rootParts = BookPaths.library.standardizedFileURL.pathComponents
+        let rootParts = BookPaths.root.standardizedFileURL.pathComponents
         var out: [String] = []
         for case let url as URL in walker {
             guard importableExtensions.contains(url.pathExtension.lowercased()) else { continue }
@@ -461,34 +485,79 @@ final class BookLibrary {
         return out
     }
 
-    /// 原文件在 Local 里叫什么。已经在里面的就地不动，外面来的（网页上传、
-    /// 从「文件」选的）拷一份进来，重名加序号。
-    nonisolated private static func keepSource(_ url: URL) -> String {
+    /// 书库根上每个文件多大。键是小写文件名——iOS 的文件系统不分大小写。
+    nonisolated private static func fileSizes() -> [String: Int] {
         let fm = FileManager.default
-        let rootParts = BookPaths.library.standardizedFileURL.pathComponents
-        let parts = url.standardizedFileURL.pathComponents
-        if parts.count > rootParts.count, Array(parts.prefix(rootParts.count)) == rootParts {
-            return parts.dropFirst(rootParts.count).joined(separator: "/")
+        guard let items = try? fm.contentsOfDirectory(
+            at: BookPaths.root, includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]) else { return [:] }
+        var out: [String: Int] = [:]
+        for url in items {
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { continue }
+            out[url.lastPathComponent.lowercased()] = size
+        }
+        return out
+    }
+
+    /// 把拆好的章节拼成一个 UTF-8 文件写进书库，顺便算出每章的字节范围。
+    ///
+    /// 文件长这样，和人直接打开看到的一样，没有额外格式：
+    ///
+    ///     第一章 陨落的天才\n\n<正文>\n\n第二章 斗气大陆\n\n<正文>\n\n
+    ///
+    /// 记的偏移只圈正文那一段，标题不算在内——读一章要的是正文，标题
+    /// 索引里已经有了。
+    ///
+    /// 写完把源文件删掉（如果它是书库里另一个文件）：epub 抽完就没用了，
+    /// GBK 的 txt 转完 UTF-8 也没必要留一份坏编码的。留着的下场是下次
+    /// 扫描又把它当新书收一遍。源文件在书库外面（网页上传的临时文件、
+    /// 从「文件」App 选的副本）就不动，那不是我们的东西。
+    nonisolated private static func writeText(
+        chapters: [ParsedChapter], stem: String, replacing source: URL
+    ) -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? {
+
+        var blob = Data()
+        var metas: [ChapterMeta] = []
+        var characters = 0
+        let gap = Data("\n\n".utf8)
+
+        for (i, chapter) in chapters.enumerated() {
+            blob.append(Data(chapter.title.utf8))
+            blob.append(gap)
+            let body = Data(chapter.body.utf8)
+            metas.append(ChapterMeta(index: i, title: chapter.title,
+                                     characterCount: chapter.body.count,
+                                     byteOffset: blob.count, byteLength: body.count))
+            blob.append(body)
+            blob.append(gap)
+            characters += chapter.body.count
         }
 
-        let raw = url.lastPathComponent
-        let stem = FileNames.sanitize((raw as NSString).deletingPathExtension)
-        let ext = (raw as NSString).pathExtension
-        let taken = Set((try? fm.contentsOfDirectory(atPath: BookPaths.library.path)) ?? [])
-        var name = ext.isEmpty ? stem : stem + "." + ext
-        if taken.map({ $0.lowercased() }).contains(name.lowercased()) {
+        // 落点。源文件本来就叫这个名字（书库里的 UTF-8 txt）的话，
+        // 就地覆盖回去——归一化过的内容替掉原来的，仍旧是同一个文件。
+        let fm = FileManager.default
+        var name = stem + ".txt"
+        var target = BookPaths.file(named: name)
+        if target.standardizedFileURL != source.standardizedFileURL,
+           fm.fileExists(atPath: target.path) {
+            // 撞上了书库里一个还没进索引的文件，让开
             var n = 2
-            while true {
-                let candidate = ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
-                if !taken.map({ $0.lowercased() }).contains(candidate.lowercased()) {
-                    name = candidate
-                    break
-                }
-                n += 1
-            }
+            while fm.fileExists(atPath: BookPaths.file(named: "\(stem) (\(n)).txt").path) { n += 1 }
+            name = "\(stem) (\(n)).txt"
+            target = BookPaths.file(named: name)
         }
-        try? fm.copyItem(at: url, to: BookPaths.library.appendingPathComponent(name))
-        return name
+
+        do {
+            try blob.write(to: target, options: .atomic)
+        } catch {
+            return nil
+        }
+
+        if target.standardizedFileURL != source.standardizedFileURL,
+           source.standardizedFileURL.path.hasPrefix(BookPaths.root.standardizedFileURL.path + "/") {
+            try? fm.removeItem(at: source)
+        }
+        return (metas, characters, blob.count, name)
     }
 
     private static let importableExtensions: Set<String> = ["txt", "epub"]
@@ -507,7 +576,7 @@ final class BookLibrary {
 
     /// 逐章读文件搜索。整本几百万字，必须在后台跑，而且要能被取消——
     /// 用户还在打字时上一次搜索就该停下，否则会积压一堆任务。
-    nonisolated func search(dirName: String, chapters: [ChapterMeta],
+    nonisolated func search(fileName: String, chapters: [ChapterMeta],
                             keyword: String, limit: Int = 200) async -> [SearchHit] {
         let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard key.count >= 1 else { return [] }
@@ -516,7 +585,7 @@ final class BookLibrary {
         for meta in chapters {
             if Task.isCancelled { return hits }
 
-            let text = Self.chapterText(dirName: dirName, chapter: meta)
+            let text = Self.chapterText(fileName: fileName, chapter: meta)
             guard !text.isEmpty else { continue }
 
             var cursor = text.startIndex
@@ -592,14 +661,17 @@ final class BookLibrary {
         guard !trimmed.isEmpty, let i = books.firstIndex(where: { $0.id == bookID }) else { return }
         books[i].title = trimmed
 
-        // 磁盘上的目录跟着改名，不然共享目录里还挂着旧书名
-        let taken = Set(books.enumerated().compactMap { $0.offset == i ? nil : $0.element.dirName })
-        let newDir = FileNames.unique(FileNames.sanitize(trimmed), taken: taken)
-        let oldDir = books[i].dirName
-        if newDir != oldDir, !oldDir.isEmpty {
-            try? FileManager.default.moveItem(at: BookPaths.directory(named: oldDir),
-                                              to: BookPaths.directory(named: newDir))
-            books[i].dirName = newDir
+        // 磁盘上的文件跟着改名，不然共享目录里还挂着旧书名
+        let old = books[i].sourceName
+        guard !old.isEmpty else { scheduleSave(); return }
+        let taken = Set(books.enumerated().compactMap {
+            $0.offset == i ? nil : ($0.element.sourceName as NSString).deletingPathExtension
+        })
+        let name = FileNames.unique(FileNames.sanitize(trimmed), taken: taken) + ".txt"
+        if name != old {
+            try? FileManager.default.moveItem(at: BookPaths.file(named: old),
+                                              to: BookPaths.file(named: name))
+            books[i].sourceName = name
         }
         scheduleSave()
     }
@@ -607,13 +679,9 @@ final class BookLibrary {
     func delete(bookID: UUID) {
         guard let i = books.firstIndex(where: { $0.id == bookID }) else { return }
         let removed = books.remove(at: i)
-        if !removed.dirName.isEmpty {
-            try? FileManager.default.removeItem(at: BookPaths.directory(named: removed.dirName))
-        }
-        // 原文件也一起删。留着的话下次扫 Local 又会把它收回来。
+        // 文件也一起删。留着的话下次扫书库又会把它收回来。
         if !removed.sourceName.isEmpty {
-            try? FileManager.default.removeItem(
-                at: BookPaths.library.appendingPathComponent(removed.sourceName))
+            try? FileManager.default.removeItem(at: BookPaths.file(named: removed.sourceName))
         }
         saveNow()
     }

@@ -15,13 +15,42 @@ enum BookFormat: String, Codable {
     }
 }
 
-/// 章节元信息。正文单独存盘，这里只留标题和字数，
-/// 否则一本长篇的全文会一直挂在内存里。
+/// 章节元信息。正文不进内存，这里只留标题、字数，和它在正文文件里的字节范围。
+///
+/// 整本书是 Books 下的一个 UTF-8 文件，读某一章就是 seek 到 byteOffset、
+/// 读 byteLength 个字节、按 UTF-8 解出来。偏移是拆分那一刻算好的，
+/// 天然落在字符边界上，不存在把一个多字节字劈开的问题。
 struct ChapterMeta: Identifiable, Codable, Hashable {
     var id = UUID()
     var index: Int
     var title: String
     var characterCount: Int
+    /// 正文在文件里的起始字节
+    var byteOffset: Int = 0
+    /// 正文占多少字节
+    var byteLength: Int = 0
+
+    init(id: UUID = UUID(), index: Int, title: String, characterCount: Int,
+         byteOffset: Int = 0, byteLength: Int = 0) {
+        self.id = id
+        self.index = index
+        self.title = title
+        self.characterCount = characterCount
+        self.byteOffset = byteOffset
+        self.byteLength = byteLength
+    }
+
+    /// 手写解码。Swift 合成的 Decodable 不拿属性默认值兜缺失的键，直接抛错——
+    /// 加了字段之后旧的 books.json 会整个解不出来，书架被清空。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        characterCount = try c.decodeIfPresent(Int.self, forKey: .characterCount) ?? 0
+        byteOffset = try c.decodeIfPresent(Int.self, forKey: .byteOffset) ?? 0
+        byteLength = try c.decodeIfPresent(Int.self, forKey: .byteLength) ?? 0
+    }
 }
 
 /// 阅读进度。
@@ -49,18 +78,17 @@ struct Bookmark: Identifiable, Codable, Hashable {
 struct Book: Identifiable, Codable, Hashable {
     var id = UUID()
     var title: String
-    /// 这本书在 Books/ 下的目录叫什么。
+    /// 正文文件在 Books 下的文件名，形如「斗破苍穹.txt」。
     ///
-    /// 不直接拿 title 当目录名：书名可以重复、可以带 / : * 这些文件系统不认的
-    /// 字符。这里存一份洗过、且和别的书不重名的，改书名时一起更新并把磁盘上的
-    /// 目录搬过去。空串表示还没分配（旧数据），加载时补。
-    var dirName: String = ""
-    /// 原文件在 Local 目录下的文件名。
+    /// 一本书就这一个文件，UTF-8，导入时转好码、归一化好。章节不再各存一份，
+    /// 只在索引里记它在这个文件里的字节范围。
     ///
-    /// 拆成章节之后原文件是留着的：能原样导出、分章逻辑改进了能拿它重拆、
-    /// 章节文件坏了也能重建。空串表示这本书是老版本导进来的，那会儿原文件
-    /// 拆完就删了，找不回来。
+    /// 不直接拿 title 当文件名：书名可以重复、可以带 / : * 这些文件系统不认的
+    /// 字符。这里存一份洗过、且和别的书不重名的，改书名时一起把文件改名。
     var sourceName: String = ""
+    /// 正文文件的字节数。用来发现文件在访达里被改过——
+    /// 大小对不上就说明索引里那套偏移已经不作数了，得重新拆一遍。
+    var textBytes: Int = 0
     var author: String = ""
     var format: BookFormat
     var addedAt: Date = Date()
@@ -71,15 +99,16 @@ struct Book: Identifiable, Codable, Hashable {
     var colorIndex: Int = 0
     var bookmarks: [Bookmark] = []
 
-    init(id: UUID = UUID(), title: String, dirName: String = "",
-         sourceName: String = "", author: String = "", format: BookFormat,
+    init(id: UUID = UUID(), title: String,
+         sourceName: String = "", textBytes: Int = 0,
+         author: String = "", format: BookFormat,
          addedAt: Date = Date(), chapters: [ChapterMeta] = [], totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
         self.id = id
         self.title = title
-        self.dirName = dirName
         self.sourceName = sourceName
+        self.textBytes = textBytes
         self.author = author
         self.format = format
         self.addedAt = addedAt
@@ -97,8 +126,8 @@ struct Book: Identifiable, Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
-        dirName = try c.decodeIfPresent(String.self, forKey: .dirName) ?? ""
         sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName) ?? ""
+        textBytes = try c.decodeIfPresent(Int.self, forKey: .textBytes) ?? 0
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
