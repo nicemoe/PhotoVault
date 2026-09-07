@@ -254,7 +254,10 @@ extension PhotoGroup {
         return Array(all.prefix(4))
     }
 
-    /// 一个目录的汇总：含子目录在内的照片数、子目录数、封面前四张。
+    /// 一个目录的汇总：含子目录在内的照片数、子目录数、封面。
+    ///
+    /// covers 留四个而不是一个：分组卡片的四宫格还要用。目录卡片只取第一张，
+    /// 多留三个的成本就是几个结构体，比为两处各走一遍子树便宜。
     struct FolderSummary {
         var photos = 0
         var subfolders = 0

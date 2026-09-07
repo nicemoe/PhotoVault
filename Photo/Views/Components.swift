@@ -283,7 +283,15 @@ struct FolderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
+            // 目录封面只用一张。
+            //
+            // 原来是四宫格。目录里全是视频的时候，那意味着每个目录要抽四次帧，
+            // 而抽一帧是开一个解码器解一帧出来，一百到三百毫秒——一屏十来张
+            // 卡片就是四五十次。抽帧、解码、视图数、状态更新，全都是四倍。
+            //
+            // 卡片本身才一百七十点宽，四宫格每格八十来点，本来也看不出什么。
+            // 换成单张：那四样开销一起砍到四分之一，图还更看得清。
+            CoverCollage(assets: Array(summary.covers.prefix(1)), tint: tint, emptyIcon: "folder")
                 .frame(maxWidth: .infinity)
                 // 高度直接给死，不靠 aspectRatio 去谈。
                 //
