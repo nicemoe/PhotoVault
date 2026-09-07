@@ -76,10 +76,25 @@ final class LibraryStore {
         load()
     }
 
+    /// 读索引。读不到就空着起来，然后靠 Media 里的文件重建。
+    ///
+    /// 索引不是唯一的真相，文件才是——每张图、每个视频都实实在在躺在
+    /// Media 下，目录结构本身就是分组和目录。所以 library.json 被删、被写坏、
+    /// 根本没建过，都不该是个死局：空着起来，第一次对账时磁盘上的文件一个
+    /// 都对不上号，全当新文件收一遍，图库就按目录结构长回来了。
+    /// 丢的是只存在索引里的那些东西——收藏、排序、自定义封面。
+    ///
+    /// 「文件不存在」和「文件在但解不开」要分开对待。前者是正常的（第一次
+    /// 启动就是这样），后者说明本来有东西、现在读不出来了——先把它挪到旁边
+    /// 留个底再重建，不然第一次自动保存就把还能救的东西盖掉了。
     private func load() {
-        guard let data = try? Data(contentsOf: Paths.libraryFile),
-              let decoded = try? Coders.makeDecoder().decode(Library.self, from: data) else {
-            library = Library()
+        guard let data = try? Data(contentsOf: Paths.libraryFile) else { return }
+        guard let decoded = try? Coders.makeDecoder().decode(Library.self, from: data) else {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            try? FileManager.default.moveItem(
+                at: Paths.libraryFile,
+                to: Paths.documents.appendingPathComponent("library.损坏-\(stamp).json"))
             return
         }
         library = decoded

@@ -28,8 +28,13 @@ extension LibraryStore {
         defer { isSyncing = false }
 
         // 扫盘甩到后台：一万张照片走一遍目录树要几百毫秒，
-        // 压在主线程上每次切回前台都要顿一下
-        let onDisk = await Task.detached(priority: .utility) { Self.scanMedia() }.value
+        // 压在主线程上每次切回前台都要顿一下。
+        //
+        // 扫不动就整个对账都不做。下面第二步是拿「磁盘上没有」当删除依据的，
+        // 而扫失败和扫出空目录长得一模一样——混为一谈的话，一次读不到 Media
+        // 就等于把整个图库连同封面一起清空。
+        guard let onDisk = await Task.detached(priority: .utility) { Self.scanMedia() }.value
+        else { return (0, 0) }
 
         var known: Set<String> = []
         for group in library.groups {
@@ -70,12 +75,17 @@ extension LibraryStore {
 
     // MARK: 扫盘
 
-    /// Media 下所有能认的媒体文件，key 是相对 Media 的路径
-    nonisolated private static func scanMedia() -> [String: Bool] {
+    /// Media 下所有能认的媒体文件，key 是相对 Media 的路径。
+    ///
+    /// 返回 nil 表示这次根本没扫成（目录不在、打不开），和「扫完了，一个
+    /// 文件都没有」是两回事：后者是删记录的依据，前者不是。
+    nonisolated private static func scanMedia() -> [String: Bool]? {
         let fm = FileManager.default
-        guard let walker = fm.enumerator(at: Paths.media,
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: Paths.media.path, isDirectory: &isDir), isDir.boolValue,
+              let walker = fm.enumerator(at: Paths.media,
                                          includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return [:] }
+                                         options: [.skipsHiddenFiles]) else { return nil }
 
         let rootParts = Paths.media.standardizedFileURL.pathComponents
         var out: [String: Bool] = [:]
