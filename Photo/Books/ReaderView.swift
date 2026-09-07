@@ -79,6 +79,12 @@ struct ReaderView: View {
             chapters = await library.chapters(of: bookID)
             restoreProgress()
         }
+        // 正读着的这本被抽走了就退出去。网页那边删书、或者在访达里删了 txt
+        // 之后对账清掉，都会走到这儿。不退的话屏幕上只剩一片背景色——
+        // 工具栏也要 book 才画得出来，连返回键都没有。
+        .onChange(of: book == nil) { _, gone in
+            if gone { dismiss() }
+        }
         .onChange(of: locator) { _, _ in saveProgress() }
         .onChange(of: settings.mode) { _, mode in
             if mode == .scroll {
