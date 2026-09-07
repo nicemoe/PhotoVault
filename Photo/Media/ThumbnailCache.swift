@@ -45,6 +45,16 @@ final class ThumbnailCache: @unchecked Sendable {
     private let lock = NSLock()
     private var keysByAsset: [UUID: Set<String>] = [:]
 
+    /// 抽不出封面的那些。
+    ///
+    /// 文件坏了、编码解不了，抽多少次都是抽不出来。而补封面那一趟每次切回
+    /// 前台都要跑，不记着的话这些视频每次都要再开一遍解码器白试一次——
+    /// 五十个坏文件就是每次切回前台十来秒的 CPU 和视频解码器空转。
+    ///
+    /// 只记在内存里，重启就忘。这样把坏文件换掉之后什么都不用做，
+    /// 下次启动自然会再试一次。
+    private var hopelessPosters = Set<UUID>()
+
     private init() {}
 
     private func key(_ id: UUID, _ maxPixel: Int) -> String { "\(id.uuidString)@\(maxPixel)" }
@@ -186,9 +196,20 @@ final class ThumbnailCache: @unchecked Sendable {
         // 排队等的这会儿，别人可能已经抽好落盘了
         if let ready = posterOnDisk(for: asset, maxPixel: maxPixel) { return ready }
 
+        lock.lock()
+        let hopeless = hopelessPosters.contains(asset.id)
+        lock.unlock()
+        guard !hopeless else { return nil }
+
         let posterURL = LibraryStore.posterURL(for: asset.id)
         guard let full = await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
-                                                 maxPixel: Self.posterSide) else { return nil }
+                                                 maxPixel: Self.posterSide) else {
+            // 记一笔，这轮别再来了
+            lock.lock()
+            hopelessPosters.insert(asset.id)
+            lock.unlock()
+            return nil
+        }
         guard let jpeg = full.jpegData(compressionQuality: 0.82) else { return full }
         try? jpeg.write(to: posterURL, options: .atomic)
 
@@ -220,6 +241,8 @@ final class ThumbnailCache: @unchecked Sendable {
     func invalidate(_ id: UUID) {
         lock.lock()
         let keys = keysByAsset.removeValue(forKey: id) ?? []
+        // 这个文件被换掉或删掉了，「抽不出来」那笔记录跟着作废
+        hopelessPosters.remove(id)
         lock.unlock()
         for k in keys { cache.removeObject(forKey: k as NSString) }
     }
@@ -228,6 +251,7 @@ final class ThumbnailCache: @unchecked Sendable {
         cache.removeAllObjects()
         lock.lock()
         keysByAsset.removeAll()
+        hopelessPosters.removeAll()
         lock.unlock()
     }
 
