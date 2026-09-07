@@ -291,26 +291,43 @@ struct FolderCard: View {
             //
             // 卡片本身才一百七十点宽，四宫格每格八十来点，本来也看不出什么。
             // 换成单张：那四样开销一起砍到四分之一，图还更看得清。
-            CoverCollage(assets: Array(summary.covers.prefix(1)), tint: tint, emptyIcon: "folder")
-                .frame(maxWidth: .infinity)
-                // 高度直接给死，不靠 aspectRatio 去谈。
-                //
-                // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
-                // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
-                // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
-                // side 本来就是按列宽算好的，用它就完了。
-                .frame(height: side)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
-                .overlay(alignment: .topTrailing) {
-                    if subfolderCount > 0 {
-                        Image(systemName: "folder.fill")
+            // 背后露出一层，看着像叠着的一摞。
+            //
+            // 封面从四宫格改成单张之后，卡片一眼看上去和一张照片没区别了。
+            // 「这是一摞不是一张」得靠形状说，角标太小、要盯着才看得见——
+            // 而人是先看到形状的。
+            ZStack(alignment: .top) {
+                RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous)
+                    .fill(tint.opacity(0.28))
+                    .frame(height: side)
+                    .padding(.horizontal, 11)
+                    .offset(y: -6)
+
+                CoverCollage(assets: Array(summary.covers.prefix(1)), tint: tint, emptyIcon: "folder")
+                    .frame(maxWidth: .infinity)
+                    // 高度直接给死，不靠 aspectRatio 去谈。
+                    //
+                    // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
+                    // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
+                    // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
+                    // side 本来就是按列宽算好的，用它就完了。
+                    .frame(height: side)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover,
+                                                style: .continuous))
+                    .overlay(alignment: .topTrailing) {
+                        // 角标一律给。原来只在「有子目录」时才出现，于是末端那些
+                        // 只装文件的目录反倒没有任何标记——而恰恰是它们最容易被
+                        // 当成一张照片。
+                        Image(systemName: subfolderCount > 0 ? "folder.fill" : "square.stack.fill")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(6)
-                            .background(.black.opacity(0.35), in: Circle())
+                            .background(.black.opacity(0.4), in: Circle())
                             .padding(8)
                     }
-                }
+            }
+            // 给背后露出的那一条留位置
+            .padding(.top, 6)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(folder.name)
