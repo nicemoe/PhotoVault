@@ -656,6 +656,18 @@ final class LibraryStore {
         }
     }
 
+    /// 每个目录里已经占掉的文件名。
+    ///
+    /// 挑落点要避开重名，而重名得问磁盘——库里的记录可能和磁盘对不上。
+    /// 但原来是每存一个文件就把整个目录列一遍：往同一个目录导一千张照片
+    /// 就是一千次列举，而目录还在一张张变长，总代价是平方级的，还全压在
+    /// 主线程上。记住结果之后，每存一张只多一次 stat。
+    ///
+    /// 只进不出。文件删掉之后这里还留着那个名字，最多让下一张白带个 (2)，
+    /// 不会出错。反过来漏记才是要命的——那会挑中一个磁盘上已经存在的名字，
+    /// 写下去就把人家的照片覆盖了。所以落笔前对选中的那一个名字再确认一次。
+    private var claimedNames: [String: Set<String>] = [:]
+
     /// 在某个目录里给新文件挑个不重名的落点，返回（相对路径, 完整 URL）
     private func destination(inDir dir: String, rawName: String,
                              fallbackExt: String) -> (String, URL) {
@@ -666,11 +678,25 @@ final class LibraryStore {
         var ext = (raw as NSString).pathExtension.lowercased()
         if ext.isEmpty { ext = fallbackExt }
 
-        let leaf = MediaLayout.uniqueFile(stem: stem, ext: ext,
-                                          taken: MediaLayout.names(in: dirURL))
+        var taken = claimedNames[dir] ?? MediaLayout.names(in: dirURL)
+        var leaf = MediaLayout.uniqueFile(stem: stem, ext: ext, taken: taken)
+        // 缓存只进不出，可能漏了别处刚放进来的文件。覆盖掉别人的照片太惨，
+        // 所以对选中的这一个名字再问一次磁盘——一次 stat，比列整个目录
+        // 便宜几个数量级；真撞上了才重新列一遍。
+        if FileManager.default.fileExists(atPath: dirURL.appendingPathComponent(leaf).path) {
+            taken = MediaLayout.names(in: dirURL)
+            leaf = MediaLayout.uniqueFile(stem: stem, ext: ext, taken: taken)
+        }
+        taken.insert(leaf)
+        claimedNames[dir] = taken
+
         let relative = dir.isEmpty ? leaf : dir + "/" + leaf
         return (relative, dirURL.appendingPathComponent(leaf))
     }
+
+    /// 忘掉记住的那些名字，下次重新问磁盘。
+    /// 对账时叫一次就够：那正是磁盘和索引可能对不上的时刻。
+    func forgetClaimedNames() { claimedNames.removeAll() }
 
     // MARK: 给磁盘对账用的小口子
     //

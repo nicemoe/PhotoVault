@@ -36,6 +36,9 @@ extension LibraryStore {
         guard let onDisk = await Task.detached(priority: .utility) { Self.scanMedia() }.value
         else { return (0, 0) }
 
+        // 磁盘刚被人动过，之前记住的「这个目录里有哪些名字」不作数了
+        forgetClaimedNames()
+
         var known: Set<String> = []
         for group in library.groups {
             for folder in group.folders {
@@ -58,7 +61,11 @@ extension LibraryStore {
 
         // 顺手把没人认领的封面清了。摘记录时已经删过对应的那张，这里是兜底：
         // 早先的版本、以及删分组/删目录那几条路都可能漏下几张。
-        Self.sweepPosters(keeping: livePosterNames)
+        //
+        // 甩到后台。一万个视频就是一万个封面文件，列一遍加上删几个，
+        // 压在主线程上每次切回前台都要顿一下。
+        let live = livePosterNames
+        await Task.detached(priority: .utility) { Self.sweepPosters(keeping: live) }.value
 
         if added > 0 || removed > 0 { saveNow() }
         return (added, removed)
@@ -161,14 +168,16 @@ extension LibraryStore {
             let info = await VideoProbe.inspect(url)
             guard info.duration > 0 || info.width > 0 else { return false }
 
-            let bytes = (try? FileManager.default
-                .attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+            // 分两步写。挤成一行的话 try? 和 as? 会叠出两层可选，
+            // 外面那层 ?? 只剥掉一层，剩下的又要在用的地方再兜一次底。
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let bytes = (attrs?[.size] as? Int) ?? 0
             let asset = Asset(fileName: path,
                               originalName: Self.displayName(from: name),
                               kind: .video,
                               width: info.width,
                               height: info.height,
-                              byteCount: bytes ?? 0,
+                              byteCount: bytes,
                               duration: info.duration)
             return attach(asset, to: folderID)
         }
