@@ -233,6 +233,16 @@ final class LibraryStore {
         group(containing: folderID)?.coverAssets(for: folderID) ?? []
     }
 
+    /// 这个目录所在的那一组，每个目录的汇总。
+    ///
+    /// 上面那三个（totalPhotoCount / totalFolderCount / coverAssets）是按单个
+    /// 目录问的，一屏几十张卡片就要问几十次，每次都从头走一遍子树。列表那一层
+    /// 改成叫这个：整组一次算完再分发，见 PhotoGroup.folderSummaries。
+    /// 那三个留给对话框、选择器这些一次只问一两个的地方。
+    func folderSummaries(inGroupOf folderID: UUID) -> [UUID: PhotoGroup.FolderSummary] {
+        group(containing: folderID)?.folderSummaries() ?? [:]
+    }
+
     func asset(_ id: UUID) -> Asset? {
         for g in library.groups {
             for f in g.folders {

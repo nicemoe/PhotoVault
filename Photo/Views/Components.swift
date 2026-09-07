@@ -215,15 +215,19 @@ struct GroupCard: View {
 // MARK: - 目录卡片
 
 struct FolderCard: View {
-    @Environment(LibraryStore.self) private var store
 
     let folder: Folder
+    /// 子目录数、含子目录的总张数、封面。由列表一次算好整组的再分发下来。
+    ///
+    /// 原来是卡片自己去 store 问，一张卡问三次，每次都从头走一遍子树——
+    /// 而 subtree 是 O(目录数²)。一屏几十张卡就是几十万次结构体拷贝，
+    /// 划一下就卡。这几个数本来就只有列表那一层能一次算完。
+    let summary: PhotoGroup.FolderSummary
     let side: CGFloat
     var tint: Color = Theme.accent
 
-    /// 子目录数和含子目录的总张数
-    private var subfolderCount: Int { store.totalFolderCount(in: folder.id) }
-    private var totalPhotos: Int { store.totalPhotoCount(in: folder.id) }
+    private var subfolderCount: Int { summary.subfolders }
+    private var totalPhotos: Int { summary.photos }
 
     /// 有子目录时说清楚「本目录 N 张」和「一共 M 张」，
     /// 否则一个只放子目录的空壳目录会显示成「0 张照片」，看着像坏了
@@ -234,7 +238,7 @@ struct FolderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: store.coverAssets(for: folder.id), tint: tint, emptyIcon: "folder")
+            CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
                 .frame(maxWidth: .infinity)
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
