@@ -222,8 +222,10 @@ struct VideoPage: View {
                 // 先判定失败，才敢把点击派发下去——按一下暂停要等半秒才动。
                 // 分层之后，按钮的点击直接命中按钮，手势只管画面上的空白处。
                 GestureCatcher(
+                    // 放不了的时候单击就是退出。提示页盖在上面、自己也接点击，
+                    // 但它未必铺满每一个角落（横屏时安全区那圈），这里兜住。
                     enabled: !locked,
-                    onSingle: onSingleTap,
+                    onSingle: { failed ? onClose() : onSingleTap() },
                     onDouble: { point in handleDoubleTap(at: point, width: geo.size.width) },
                     onPan: { state, start, translation in
                         handlePan(state: state, start: start,
@@ -285,19 +287,50 @@ struct VideoPage: View {
 
     // MARK: 控件
 
+    /// 放不了的时候摆这一页。
+    ///
+    /// 它是**唯一**的出口，所以必须自己带着退路：播放控件在 failed 这条分支
+    /// 里根本不画，而预览页那边看到当前是视频，也把自己的顶栏收了——两边
+    /// 都没有关闭键，人只能强杀 App。
+    ///
+    /// 点哪儿都退出，右上角再给一个看得见的关闭键。两条都要：手势是最快的，
+    /// 但看不见；按钮慢一步，却是人第一眼会找的东西。
     private var unplayableNote: some View {
         // 走到这儿说明硬解和软解都起不来了。
         // 直接留一块黑屏 + 一个按不动的播放键，只会让人以为是坏了。
-        VStack(spacing: 10) {
-            Image(systemName: "film")
-                .font(.system(size: 40))
-            Text("这个文件解不开")
-                .font(.system(size: 14, weight: .semibold))
-            Text("文件已保存，可以从「文件」App 里拷回电脑")
-                .font(.system(size: 12))
-                .opacity(0.7)
+        ZStack {
+            VStack(spacing: 10) {
+                Image(systemName: "film")
+                    .font(.system(size: 40))
+                Text("这个文件解不开")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("硬解和软解都试过了。文件已保存，可以从「文件」App 里拷回电脑")
+                    .font(.system(size: 12))
+                    .multilineTextAlignment(.center)
+                    .opacity(0.7)
+                Text("点一下退出")
+                    .font(.system(size: 12, weight: .semibold))
+                    .opacity(0.55)
+                    .padding(.top, 6)
+            }
+            .padding(.horizontal, 32)
+            .foregroundStyle(.white.opacity(0.75))
         }
-        .foregroundStyle(.white.opacity(0.75))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 整块都能点，不只是那几行字
+        .contentShape(Rectangle())
+        .onTapGesture { onClose() }
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .contentShape(Rectangle())
+            }
+            .padding(.trailing, 20 + safeInsets.right)
+            .padding(.top, 10 + safeInsets.top)
+        }
     }
 
     /// 控件贴着四边摆，中间留给画面。
