@@ -768,7 +768,7 @@ struct VideoPage: View {
     /// 这里只暂停不拆：画面留着跟动画一起滑走，比当场变黑好看。真正的收尾
     /// 还是 onDisappear 里那次 stop，进度也在那儿交出去。
     private func closeNow() {
-        player?.pause()
+        engine?.pause()
         isPlaying = false
         onClose()
     }
