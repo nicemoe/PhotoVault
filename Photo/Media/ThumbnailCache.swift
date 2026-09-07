@@ -56,50 +56,58 @@ final class ThumbnailCache: @unchecked Sendable {
         cache.object(forKey: key(asset.id, maxPixel) as NSString)
     }
 
-    /// 异步生成缩略图。
+    /// 异步生成缩略图。排队做，别一拥而上。
     ///
-    /// 排队做，一次最多三张。
+    /// 原来是一人一个 Task.detached 全放出去，CPU 被塞满，主线程连排版都排
+    /// 不上——点进分组、往下滑的那种一顿一顿就是这么来的。而且 detached 任务
+    /// 不继承取消：格子划出屏幕时 SwiftUI 会把 .task 取消掉，里面那个照样跑完，
+    /// 快速划过两百个目录就是八百次没人要的解码，把真正在屏幕上的堵在后面。
     ///
-    /// 一屏目录卡片能同时挂起四五十张缩略图，每张都是一次全尺寸 JPEG 解码，
-    /// 几十毫秒起步。原来是一人一个 Task.detached 全放出去，CPU 被塞满，
-    /// 主线程连排版都排不上——点进分组、往下滑的那种一顿一顿就是这么来的。
+    /// 现在不开新任务、直接在这条任务链上做（nonisolated 的 async 本来就跑在
+    /// 协作线程池里），外面套闸门。而且分两条队，因为这是两个量级的活：
     ///
-    /// 更要命的是 detached 任务不继承取消。格子划出屏幕时 SwiftUI 会把
-    /// .task 取消掉，但里面那个 detached 照样跑完。快速划过两百个目录，
-    /// 就是八百次没人要的解码还在排着队，把后面真正在屏幕上的那些堵在后面。
+    /// - 解一张图（含封面已经落盘的视频）：几十毫秒，三个名额
+    /// - 给视频抽一帧：要开解码器解一帧出来，一百到三百毫秒，一个名额
     ///
-    /// 改成不开新任务、直接在这条任务链上做：取消就传得下来，排到自己时
-    /// 先看一眼还要不要，不要就跳过。三个名额是拍的——够喂饱屏幕，
-    /// 又不至于把 CPU 占光。
+    /// 目录里全是视频的时候，一屏十来张卡片就是四五十次抽帧。混在一条队里
+    /// 会把 CPU 占满，主线程排版被挤到后面。分开之后抽帧慢慢来，封面一张张
+    /// 冒出来，但滑动始终是顺的——这个取舍很明确：人能接受封面慢慢出现，
+    /// 不能接受滑不动。
     func thumbnail(for asset: Asset, maxPixel: Int) async -> UIImage? {
         if let hit = cached(asset, maxPixel: maxPixel) { return hit }
 
-        await Self.gate.enter()
-        let image = await generate(asset, maxPixel: maxPixel)
-        await Self.gate.leave()
+        await Self.decodeGate.enter()
+        var image = await decodeFromDisk(asset, maxPixel: maxPixel)
+        await Self.decodeGate.leave()
+
+        // 盘上还没有封面的视频，才需要真的去抽一帧
+        if image == nil, asset.isVideo, !Task.isCancelled {
+            await Self.posterGate.enter()
+            image = await extractPoster(asset, maxPixel: maxPixel)
+            await Self.posterGate.leave()
+        }
 
         guard let image else { return nil }
         store(image, id: asset.id, maxPixel: maxPixel)
         return image
     }
 
-    private static let gate = DecodeGate(limit: 3)
+    private static let decodeGate = DecodeGate(limit: 3)
+    private static let posterGate = DecodeGate(limit: 1)
 
-    private func generate(_ asset: Asset, maxPixel: Int) async -> UIImage? {
+    /// 从盘上现成的东西解一张图出来。视频看封面文件，没有就返回 nil。
+    private func decodeFromDisk(_ asset: Asset, maxPixel: Int) -> UIImage? {
         // 排队的这段时间里格子可能已经划走了，别做这份白工
         guard !Task.isCancelled else { return nil }
         // 也可能别人已经把同一张生成好了
         if let hit = cached(asset, maxPixel: maxPixel) { return hit }
 
-        if asset.isVideo { return await videoPoster(for: asset, maxPixel: maxPixel) }
-        // 这个方法本身就不在主线程上（nonisolated 的 async 一定跑在协作线程池里），
-        // 不用再开一层任务——开了反而把取消断在这儿。
+        if asset.isVideo { return posterOnDisk(for: asset, maxPixel: maxPixel) }
         return Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel)
     }
 
-    /// 视频封面：先看磁盘上有没有抽好的，没有再抽一帧存下来。
-    /// 抽帧要一两百毫秒，不落盘的话每次冷启动划列表都会卡。
-    private func videoPoster(for asset: Asset, maxPixel: Int) async -> UIImage? {
+    /// 盘上抽好的那张封面。没有就返回 nil，交给 extractPoster 去抽。
+    private func posterOnDisk(for asset: Asset, maxPixel: Int) -> UIImage? {
         let posterURL = LibraryStore.posterURL(for: asset.id)
 
         // 先只问尺寸，别把整张解出来。
@@ -119,6 +127,19 @@ final class ThumbnailCache: @unchecked Sendable {
             return image
         }
 
+        return nil
+    }
+
+    /// 真去开个解码器抽一帧，抽完落盘。
+    ///
+    /// 这是整条链上最贵的一步，所以单独排一条只有一个名额的队。
+    /// 落盘之后下次就走 posterOnDisk 那条便宜路了。
+    private func extractPoster(_ asset: Asset, maxPixel: Int) async -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        // 排队等的这会儿，别人可能已经抽好落盘了
+        if let ready = posterOnDisk(for: asset, maxPixel: maxPixel) { return ready }
+
+        let posterURL = LibraryStore.posterURL(for: asset.id)
         // 统一按一个较大的尺寸抽，各处再各自降采样，避免同一个视频抽好几遍
         let posterSide = 720
         guard let full = await VideoProbe.poster(for: LibraryStore.fileURL(for: asset),
