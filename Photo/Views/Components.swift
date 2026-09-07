@@ -286,55 +286,28 @@ struct FolderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 目录封面只用一张。
-            //
-            // 原来是四宫格。目录里全是视频的时候，那意味着每个目录要抽四次帧，
-            // 而抽一帧是开一个解码器解一帧出来，一百到三百毫秒——一屏十来张
-            // 卡片就是四五十次。抽帧、解码、视图数、状态更新，全都是四倍。
-            //
-            // 卡片本身才一百七十点宽，四宫格每格八十来点，本来也看不出什么。
-            // 换成单张：那四样开销一起砍到四分之一，图还更看得清。
-            // 背后露出一层，看着像叠着的一摞。
-            //
-            // 封面从四宫格改成单张之后，卡片一眼看上去和一张照片没区别了。
-            // 「这是一摞不是一张」得靠形状说，角标太小、要盯着才看得见——
-            // 而人是先看到形状的。
-            ZStack(alignment: .top) {
-                RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous)
-                    .fill(tint.opacity(0.28))
-                    .frame(height: side)
-                    .padding(.horizontal, 11)
-                    .offset(y: -6)
-
-                // 四宫格。贵的从来不是画四张图，是给四个视频各抽一帧
-                // （开解码器解一帧，一百到三百毫秒）。那一步挪到后台提前做完了
-                // （见 backfillPosters），这里剩下的就是四次读盘解图，
-                // 和一张图差不了多少。
-                CoverCollage(assets: summary.covers, side: side, tint: tint, emptyIcon: "folder")
-                    .frame(maxWidth: .infinity)
-                    // 高度直接给死，不靠 aspectRatio 去谈。
-                    //
-                    // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
-                    // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
-                    // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
-                    // side 本来就是按列宽算好的，用它就完了。
-                    .frame(height: side)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover,
-                                                style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        // 角标一律给。原来只在「有子目录」时才出现，于是末端那些
-                        // 只装文件的目录反倒没有任何标记——而恰恰是它们最容易被
-                        // 当成一张照片。
-                        Image(systemName: subfolderCount > 0 ? "folder.fill" : "square.stack.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(6)
-                            .background(.black.opacity(0.4), in: Circle())
-                            .padding(8)
-                    }
-            }
-            // 给背后露出的那一条留位置
-            .padding(.top, 6)
+            // 四宫格本身就在说「这是一摞」，不用再在背后垫一层露边。
+            // 那层是封面临时改成单图那阵子加的，图拼回来就多余了。
+            CoverCollage(assets: summary.covers, side: side, tint: tint, emptyIcon: "folder")
+                .frame(maxWidth: .infinity)
+                // 高度直接给死，不靠 aspectRatio 去谈。
+                //
+                // 拼贴是一张当场画出来的位图，没有固有尺寸，这时候让 aspectRatio
+                // 把它摁成正方形要多走一轮尺寸协商，而 LazyVGrid 每滑出一行都要
+                // 新建一批格子，每格都付一次。side 本来就是按列宽算好的，用它就完了。
+                .frame(height: side)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    // 角标一律给。原来只在「有子目录」时才出现，于是末端那些
+                    // 只装文件的目录反倒没有任何标记——而一个只放了一张图的目录，
+                    // 拼出来就是一张图，正是最容易被当成照片的那种。
+                    Image(systemName: subfolderCount > 0 ? "folder.fill" : "square.stack.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.black.opacity(0.4), in: Circle())
+                        .padding(8)
+                }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(folder.name)
