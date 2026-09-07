@@ -1,14 +1,25 @@
 import Foundation
 import Observation
 
-/// 书在磁盘上怎么摆：`Books/<书名>/0001 第一章 风起.txt`。
+/// 书在磁盘上怎么摆。
 ///
-/// 早先是 `Books/<书的 UUID>/0.txt`——目录是一串 UUID、章节是纯数字。
-/// 开了文件共享之后从访达打开看到的就是这个，哪本书哪一章全看不出来，
-/// 而且原始的 txt/epub 拆完就没了，连「拿回原文件」都做不到。
+///     Documents/
+///       书库/                      ← 原文件。丢书进这里，导出也从这里拿
+///         斗破苍穹.txt
+///       章节/                      ← 拆好的，App 读这里
+///         斗破苍穹/0001 第一章 风起.txt
+///       books.json
+///
+/// 原文件留着不是为了占地方：能原样导出、分章逻辑以后改进了能拿它重拆、
+/// 章节文件坏了也能重建。代价是占用翻倍，一本三兆的长篇变成六兆。
+///
+/// 「哪些书是新的」也因此变成一件确定的事：拿索引里的 sourceName 和
+/// 书库里的文件对一遍，多出来的就是新拖进来的。
 enum BookPaths {
-    static let root: URL = {
-        let url = Paths.documents.appendingPathComponent("Books", isDirectory: true)
+
+    /// 原文件
+    static let library: URL = {
+        let url = Paths.documents.appendingPathComponent("书库", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
         // 放一份说明。用 .md，不在收书的后缀里，不会把自己当成一本书导进去。
@@ -17,24 +28,28 @@ enum BookPaths {
             let text = """
             # 书库
 
-            一本书 = 一个文件夹，里面是按顺序编好号的章节文件。
+            把 TXT 或 EPUB 丢进这个文件夹，回到 App 就会自动收进书架。
+            整个文件夹丢进来也行，里面的书会被翻出来。
 
-            **要加书就把 TXT 或 EPUB 直接丢在这一层**，回到 App 就会自动
-            拆成章节、变成一个文件夹，原文件随后消失。整个文件夹丢进来也行，
-            里面的书会被收走。
-
-            不用另开一个「导入」文件夹：收进来的书是文件夹，还没收的是文件，
-            一眼就分得清。
+            **原文件会一直留在这儿**，随时可以拷回电脑。App 读的是隔壁
+            「章节」文件夹里拆好的那份，那份是从这里生成的。
             """
             try? Data(text.utf8).write(to: readme, options: .atomic)
         }
         return url
     }()
 
-    static let indexFile = root.appendingPathComponent("books.json")
+    /// 拆好的章节
+    static let chapters: URL = {
+        let url = Paths.documents.appendingPathComponent("章节", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    static let indexFile = Paths.documents.appendingPathComponent("books.json")
 
     static func directory(named dirName: String) -> URL {
-        root.appendingPathComponent(dirName, isDirectory: true)
+        chapters.appendingPathComponent(dirName, isDirectory: true)
     }
 
     /// 每章单独一个文件。整本读进内存的话，一部几百万字的长篇会直接把 App 撑爆。
@@ -49,6 +64,31 @@ enum BookPaths {
 
     static func chapterFile(dirName: String, index: Int, title: String) -> URL {
         directory(named: dirName).appendingPathComponent(chapterName(index: index, title: title))
+    }
+
+    /// 老版本把索引和章节都塞在 Books/ 下面。整个目录改个名就完事，
+    /// 两次 rename，不动里面的文件，放在启动路径上也不怕。
+    static func migrateLayout() {
+        let fm = FileManager.default
+        let old = Paths.documents.appendingPathComponent("Books", isDirectory: true)
+        guard fm.fileExists(atPath: old.path) else { return }
+
+        let oldIndex = old.appendingPathComponent("books.json")
+        if fm.fileExists(atPath: oldIndex.path), !fm.fileExists(atPath: indexFile.path) {
+            try? fm.moveItem(at: oldIndex, to: indexFile)
+        }
+        // 章节目录是 lazy 建的，这时候可能还没建；没建就直接改名，建了就搬内容
+        if fm.fileExists(atPath: Paths.documents.appendingPathComponent("章节").path) {
+            if let items = try? fm.contentsOfDirectory(at: old, includingPropertiesForKeys: nil) {
+                for item in items {
+                    try? fm.moveItem(at: item,
+                                     to: chapters.appendingPathComponent(item.lastPathComponent))
+                }
+            }
+            try? fm.removeItem(at: old)
+        } else {
+            try? fm.moveItem(at: old, to: Paths.documents.appendingPathComponent("章节"))
+        }
     }
 }
 
@@ -130,6 +170,7 @@ final class BookLibrary {
     private(set) var importingTitle: String?
 
     init() {
+        BookPaths.migrateLayout()
         load()
     }
 
@@ -142,7 +183,6 @@ final class BookLibrary {
         settings = index.settings
         shelfLayout = index.shelfLayout
         appearance = index.appearance
-        repairTitles()
     }
 
     private var saveTask: Task<Void, Never>?
@@ -277,9 +317,15 @@ final class BookLibrary {
             return (metas, total)
         }.value
 
+        // 原文件留一份在书库里：能原样导出，分章逻辑以后改进了还能拿它重拆
+        let sourceName = await Task.detached(priority: .utility) {
+            Self.keepSource(url)
+        }.value
+
         let book = Book(id: bookID,
                         title: parsed.title,
                         dirName: dirName,
+                        sourceName: sourceName,
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
                         chapters: metas,
@@ -315,91 +361,72 @@ final class BookLibrary {
     /// 留着只会让人以为还没导，下次进前台又导一遍。
     /// 返回收进来的本数，为 0 表示文件夹是空的或者里面没有能认的格式。
     @discardableResult
+    /// 收「书库」里还没收过的书。
+    ///
+    /// 「哪些是新的」是拿索引对出来的：每本书都记着自己的原文件叫什么
+    /// （sourceName），书库里对不上号的就是新拖进来的。不用比文件数——
+    /// 比数不可靠，删一个加一个数字还一样。
     func importLooseFiles() async -> Int {
-        let fm = FileManager.default
-        var files: [URL] = []
-
-        // 老版本单独开了个「导入」文件夹。里面要是还剩着东西就一并收走，
-        // 收完把那个空文件夹删掉，以后只认 Books 这一处。
-        let legacy = Paths.documents.appendingPathComponent("导入", isDirectory: true)
-        var roots = [BookPaths.root]
-        if fm.fileExists(atPath: legacy.path) { roots.append(legacy) }
-
-        for root in roots {
-            guard let items = try? fm.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]) else { continue }
-
-            for item in items {
-                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-                if isDir {
-                    // 顶层的文件夹要么是一本已经收好的书，要么是刚拖进来的一堆书。
-                    // 里面全是「0001 xxx.txt」这种就是前者，别把人家的章节
-                    // 当成一本本新书导进去——万一索引丢了，那会把一本书炸成几百本。
-                    guard !Self.looksLikeBookFolder(item) else { continue }
-                    files.append(contentsOf: Self.importableFiles(under: item))
-                } else if Self.importableExtensions.contains(item.pathExtension.lowercased()) {
-                    files.append(item)
-                }
-            }
-        }
-        guard !files.isEmpty else {
-            Self.removeIfEmpty(legacy)
-            return 0
-        }
+        let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
+        let fresh = Self.scanLibrary().filter { !known.contains($0.lowercased()) }
+        guard !fresh.isEmpty else { return 0 }
 
         var saved = 0
-        for url in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+        for name in fresh.sorted() {
+            let url = BookPaths.library.appendingPathComponent(name)
             guard (try? await importBook(from: url)) != nil else { continue }
-            try? fm.removeItem(at: url)
             saved += 1
         }
-
-        // 收完之后把空掉的文件夹清掉
-        if let items = try? fm.contentsOfDirectory(at: BookPaths.root,
-                                                   includingPropertiesForKeys: [.isDirectoryKey],
-                                                   options: [.skipsHiddenFiles]) {
-            for item in items where (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                guard !Self.looksLikeBookFolder(item) else { continue }
-                Self.removeIfEmpty(item)
-            }
-        }
-        Self.removeIfEmpty(legacy)
         return saved
     }
 
-    /// 这个文件夹是不是一本已经收好的书：里面的 txt 都叫「0001 章节名.txt」
-    nonisolated private static func looksLikeBookFolder(_ dir: URL) -> Bool {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
-            return false
-        }
-        let texts = names.filter { $0.lowercased().hasSuffix(".txt") }
-        guard !texts.isEmpty else { return false }
-        return texts.allSatisfy { name in
-            let head = name.prefix(5)
-            return head.count == 5 && head.dropLast().allSatisfy(\.isNumber) && head.last == " "
-        }
-    }
-
-    nonisolated private static func importableFiles(under dir: URL) -> [URL] {
-        guard let walker = FileManager.default.enumerator(
-            at: dir, includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]) else { return [] }
-        var out: [URL] = []
-        for case let url as URL in walker
-        where importableExtensions.contains(url.pathExtension.lowercased()) {
-            out.append(url)
+    /// 书库里所有能收的文件，返回相对书库的路径。
+    /// 子目录也翻——拖一整个文件夹进来是常事，而且保留人家的分类。
+    nonisolated private static func scanLibrary() -> [String] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: BookPaths.library,
+                                         includingPropertiesForKeys: [.isRegularFileKey],
+                                         options: [.skipsHiddenFiles]) else { return [] }
+        let rootParts = BookPaths.library.standardizedFileURL.pathComponents
+        var out: [String] = []
+        for case let url as URL in walker {
+            guard importableExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            let parts = url.standardizedFileURL.pathComponents
+            guard parts.count > rootParts.count,
+                  Array(parts.prefix(rootParts.count)) == rootParts else { continue }
+            out.append(parts.dropFirst(rootParts.count).joined(separator: "/"))
         }
         return out
     }
 
-    nonisolated private static func removeIfEmpty(_ dir: URL) {
+    /// 原文件在书库里叫什么。已经在书库里的就地不动，外面来的（网页上传、
+    /// 从「文件」选的）拷一份进来，重名加序号。
+    nonisolated private static func keepSource(_ url: URL) -> String {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: dir.path),
-              let left = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
-        // 只剩说明文件也算空
-        let real = left.filter { $0 != "使用说明.md" && !$0.hasPrefix(".") }
-        if real.isEmpty { try? fm.removeItem(at: dir) }
+        let rootParts = BookPaths.library.standardizedFileURL.pathComponents
+        let parts = url.standardizedFileURL.pathComponents
+        if parts.count > rootParts.count, Array(parts.prefix(rootParts.count)) == rootParts {
+            return parts.dropFirst(rootParts.count).joined(separator: "/")
+        }
+
+        let raw = url.lastPathComponent
+        let stem = FileNames.sanitize((raw as NSString).deletingPathExtension)
+        let ext = (raw as NSString).pathExtension
+        let taken = Set((try? fm.contentsOfDirectory(atPath: BookPaths.library.path)) ?? [])
+        var name = ext.isEmpty ? stem : stem + "." + ext
+        if taken.map({ $0.lowercased() }).contains(name.lowercased()) {
+            var n = 2
+            while true {
+                let candidate = ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
+                if !taken.map({ $0.lowercased() }).contains(candidate.lowercased()) {
+                    name = candidate
+                    break
+                }
+                n += 1
+            }
+        }
+        try? fm.copyItem(at: url, to: BookPaths.library.appendingPathComponent(name))
+        return name
     }
 
     private static let importableExtensions: Set<String> = ["txt", "epub"]
@@ -520,6 +547,11 @@ final class BookLibrary {
         let removed = books.remove(at: i)
         if !removed.dirName.isEmpty {
             try? FileManager.default.removeItem(at: BookPaths.directory(named: removed.dirName))
+        }
+        // 原文件也一起删。留着的话下次扫书库又会把它收回来。
+        if !removed.sourceName.isEmpty {
+            try? FileManager.default.removeItem(
+                at: BookPaths.library.appendingPathComponent(removed.sourceName))
         }
         saveNow()
     }

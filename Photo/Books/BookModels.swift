@@ -55,6 +55,12 @@ struct Book: Identifiable, Codable, Hashable {
     /// 字符。这里存一份洗过、且和别的书不重名的，改书名时一起更新并把磁盘上的
     /// 目录搬过去。空串表示还没分配（旧数据），加载时补。
     var dirName: String = ""
+    /// 原文件在「书库」下的文件名。
+    ///
+    /// 拆成章节之后原文件是留着的：能原样导出、分章逻辑改进了能拿它重拆、
+    /// 章节文件坏了也能重建。空串表示这本书是老版本导进来的，那会儿原文件
+    /// 拆完就删了，找不回来。
+    var sourceName: String = ""
     var author: String = ""
     var format: BookFormat
     var addedAt: Date = Date()
@@ -66,13 +72,14 @@ struct Book: Identifiable, Codable, Hashable {
     var bookmarks: [Bookmark] = []
 
     init(id: UUID = UUID(), title: String, dirName: String = "",
-         author: String = "", format: BookFormat,
+         sourceName: String = "", author: String = "", format: BookFormat,
          addedAt: Date = Date(), chapters: [ChapterMeta] = [], totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
         self.id = id
         self.title = title
         self.dirName = dirName
+        self.sourceName = sourceName
         self.author = author
         self.format = format
         self.addedAt = addedAt
@@ -91,6 +98,7 @@ struct Book: Identifiable, Codable, Hashable {
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
         dirName = try c.decodeIfPresent(String.self, forKey: .dirName) ?? ""
+        sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName) ?? ""
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
