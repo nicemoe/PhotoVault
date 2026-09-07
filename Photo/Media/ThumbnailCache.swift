@@ -102,12 +102,21 @@ final class ThumbnailCache: @unchecked Sendable {
     private func videoPoster(for asset: Asset, maxPixel: Int) async -> UIImage? {
         let posterURL = LibraryStore.posterURL(for: asset.id)
 
-        if let data = try? Data(contentsOf: posterURL),
-           let cached = UIImage(data: data) {
-            // 存的那张比要的还小就不能用，宁可重抽一次
-            if max(cached.size.width, cached.size.height) >= CGFloat(maxPixel) - 1 {
-                return Self.downsample(data: data, maxPixel: maxPixel) ?? cached
-            }
+        // 先只问尺寸，别把整张解出来。
+        //
+        // 原来是 UIImage(data:) 先整张解一遍看它多大，够大再 downsample 解第二遍
+        // ——同一张 720px 的 JPEG 白解了一次。一屏目录卡片有几十张封面，
+        // 每张都多解一遍，滑动时就顶到主线程的排版上了。
+        // CGImageSource 读属性只碰文件头，不碰像素。
+        if let source = CGImageSourceCreateWithURL(
+            posterURL as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = props[kCGImagePropertyPixelWidth] as? Int,
+           let height = props[kCGImagePropertyPixelHeight] as? Int,
+           // 存的那张比要的还小就不能用，宁可重抽一次
+           max(width, height) >= maxPixel - 1,
+           let image = Self.downsample(source: source, maxPixel: maxPixel) {
+            return image
         }
 
         // 统一按一个较大的尺寸抽，各处再各自降采样，避免同一个视频抽好几遍

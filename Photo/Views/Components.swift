@@ -122,46 +122,59 @@ struct CoverCollage: View {
 
     private let gap: CGFloat = 2
 
+    /// 不用 GeometryReader。
+    ///
+    /// 原来整个拼贴套在 GeometryReader 里，靠量出来的宽高算每一格的尺寸。
+    /// 在 LazyVGrid 里这是笔白付的开销：GeometryReader 不给子视图提议尺寸，
+    /// 父容器得再走一轮布局才定得下来，而目录网格每滑出一行就要新建一批格子，
+    /// 每个格子都付一次。资产网格一个格子就一张图、没有 GeometryReader，
+    /// 所以滑起来顺——「目录那层卡、点进去看视频不卡」的差别就在这儿。
+    ///
+    /// 外面已经用 aspectRatio 把容器摁成正方形了，里面要的只是「均分」，
+    /// 交给 maxWidth / maxHeight: .infinity 就够，不需要知道具体多少点。
     var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-
+        Group {
             switch assets.count {
             case 0:
-                ZStack {
-                    tint.opacity(0.12)
-                    Image(systemName: emptyIcon)
-                        .font(.system(size: min(w, h) * 0.26, weight: .regular))
-                        .foregroundStyle(tint.opacity(0.55))
-                }
+                Image(systemName: emptyIcon)
+                    .resizable()
+                    .scaledToFit()
+                    // 相当于原来那句「边长的 26%」，只是不用去问边长
+                    .scaleEffect(0.3)
+                    .foregroundStyle(tint.opacity(0.55))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(tint.opacity(0.12))
             case 1:
                 AssetImage(asset: assets[0], maxPixel: maxPixel)
             case 2:
                 HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: (w - gap) / 2)
-                    AssetImage(asset: assets[1], maxPixel: maxPixel).frame(width: (w - gap) / 2)
+                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(maxWidth: .infinity)
+                    AssetImage(asset: assets[1], maxPixel: maxPixel).frame(maxWidth: .infinity)
                 }
             case 3:
+                // 原来大图占 62%，那个比例非得量出宽度才算得了。
+                // 改成对半分：省掉那轮布局，看着也更规整。
                 HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: w * 0.62 - gap)
+                    AssetImage(asset: assets[0], maxPixel: maxPixel)
+                        .frame(maxWidth: .infinity)
                     VStack(spacing: gap) {
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(height: (h - gap) / 2)
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(height: (h - gap) / 2)
+                        AssetImage(asset: assets[1], maxPixel: 320).frame(maxHeight: .infinity)
+                        AssetImage(asset: assets[2], maxPixel: 320).frame(maxHeight: .infinity)
                     }
+                    .frame(maxWidth: .infinity)
                 }
             default:
                 VStack(spacing: gap) {
                     HStack(spacing: gap) {
-                        AssetImage(asset: assets[0], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(width: (w - gap) / 2)
+                        AssetImage(asset: assets[0], maxPixel: 320).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[1], maxPixel: 320).frame(maxWidth: .infinity)
                     }
-                    .frame(height: (h - gap) / 2)
+                    .frame(maxHeight: .infinity)
                     HStack(spacing: gap) {
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[3], maxPixel: 320).frame(width: (w - gap) / 2)
+                        AssetImage(asset: assets[2], maxPixel: 320).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[3], maxPixel: 320).frame(maxWidth: .infinity)
                     }
-                    .frame(height: (h - gap) / 2)
+                    .frame(maxHeight: .infinity)
                 }
             }
         }
