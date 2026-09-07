@@ -49,6 +49,12 @@ struct Bookmark: Identifiable, Codable, Hashable {
 struct Book: Identifiable, Codable, Hashable {
     var id = UUID()
     var title: String
+    /// 这本书在 Books/ 下的目录叫什么。
+    ///
+    /// 不直接拿 title 当目录名：书名可以重复、可以带 / : * 这些文件系统不认的
+    /// 字符。这里存一份洗过、且和别的书不重名的，改书名时一起更新并把磁盘上的
+    /// 目录搬过去。空串表示还没分配（旧数据），加载时补。
+    var dirName: String = ""
     var author: String = ""
     var format: BookFormat
     var addedAt: Date = Date()
@@ -59,12 +65,14 @@ struct Book: Identifiable, Codable, Hashable {
     var colorIndex: Int = 0
     var bookmarks: [Bookmark] = []
 
-    init(id: UUID = UUID(), title: String, author: String = "", format: BookFormat,
+    init(id: UUID = UUID(), title: String, dirName: String = "",
+         author: String = "", format: BookFormat,
          addedAt: Date = Date(), chapters: [ChapterMeta] = [], totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
         self.id = id
         self.title = title
+        self.dirName = dirName
         self.author = author
         self.format = format
         self.addedAt = addedAt
@@ -82,6 +90,7 @@ struct Book: Identifiable, Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        dirName = try c.decodeIfPresent(String.self, forKey: .dirName) ?? ""
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
