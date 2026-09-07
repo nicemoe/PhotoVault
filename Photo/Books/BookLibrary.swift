@@ -153,9 +153,26 @@ final class BookLibrary {
 
     // MARK: 读写
 
+    /// 读索引。读不到就当书架是空的，然后靠 Books 里的文件重建。
+    ///
+    /// 索引不是唯一的真相，书本身才是——每本书就是 Books 下的一个 txt。
+    /// 所以 books.json 被删、被写坏、根本没建过，都不该是个死局：
+    /// 空着起来，第一次对账时目录里的文件一个都对不上号，全当新书收一遍，
+    /// 书架就长回来了。丢的只有阅读进度和书签，那两样确实只存在索引里。
+    ///
+    /// 「文件不存在」和「文件在但解不开」要分开对待。前者是正常的（第一次
+    /// 启动就是这样），后者说明本来有东西、现在读不出来了——先把它挪到旁边
+    /// 留个底再重建，不然第一次自动保存就把还能救的进度盖掉了。
     private func load() {
-        guard let data = try? Data(contentsOf: BookPaths.indexFile),
-              let index = try? Coders.makeDecoder().decode(BookIndex.self, from: data) else { return }
+        guard let data = try? Data(contentsOf: BookPaths.indexFile) else { return }
+        guard let index = try? Coders.makeDecoder().decode(BookIndex.self, from: data) else {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            try? FileManager.default.moveItem(
+                at: BookPaths.indexFile,
+                to: Paths.documents.appendingPathComponent("books.损坏-\(stamp).json"))
+            return
+        }
         books = index.books
         settings = index.settings
         shelfLayout = index.shelfLayout
@@ -365,7 +382,8 @@ final class BookLibrary {
 
         let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
         // 扫盘甩到后台：一千个文件走一遍目录树也要点时间
-        let all = await Task.detached(priority: .utility) { Self.scanLibrary() }.value
+        guard let all = await Task.detached(priority: .utility) { Self.scanLibrary() }.value
+        else { return 0 }
         let fresh = all.filter { !known.contains($0.lowercased()) }
         guard !fresh.isEmpty else { return 0 }
 
@@ -454,7 +472,10 @@ final class BookLibrary {
     /// 无从判断在不在，不能拿「找不到」当「被删了」。
     @discardableResult
     func pruneMissingSources() -> Int {
-        let onDisk = Set(Self.scanLibrary().map { $0.lowercased() })
+        // 扫不动就什么都别删。返回 nil 是「这次没看清」，不是「目录是空的」——
+        // 把这两种当成一回事的话，一次扫描失败就能把整个书架清光。
+        guard let names = Self.scanLibrary() else { return 0 }
+        let onDisk = Set(names.map { $0.lowercased() })
         let doomed = books.filter { !$0.sourceName.isEmpty
             && !onDisk.contains($0.sourceName.lowercased()) }
         guard !doomed.isEmpty else { return 0 }
@@ -468,11 +489,16 @@ final class BookLibrary {
     /// 书库里所有能收的文件，返回相对书库根的路径。
     /// 子目录也翻——拖一整个文件夹进来是常事。收进来之后文件会被
     /// 归到根上（见 writeText），所以子目录只是个入口，不是长期形态。
-    nonisolated private static func scanLibrary() -> [String] {
+    ///
+    /// 返回 nil 表示这次根本没扫成（目录不在、打不开），和「扫完了，一个
+    /// 文件都没有」是两回事：后者是删书的依据，前者不是。
+    nonisolated private static func scanLibrary() -> [String]? {
         let fm = FileManager.default
-        guard let walker = fm.enumerator(at: BookPaths.root,
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: BookPaths.root.path, isDirectory: &isDir), isDir.boolValue,
+              let walker = fm.enumerator(at: BookPaths.root,
                                          includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return [] }
+                                         options: [.skipsHiddenFiles]) else { return nil }
         let rootParts = BookPaths.root.standardizedFileURL.pathComponents
         var out: [String] = []
         for case let url as URL in walker {
