@@ -10,10 +10,30 @@ enum Paths {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }()
 
-    /// 原图存放目录
+    /// 照片和视频。开了文件共享之后这里就是入口——直接往里建目录、丢文件，
+    /// App 回到前台会扫一遍收进来。
     static let media: URL = {
         let url = documents.appendingPathComponent("Media", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        // 放一份说明。用 .md，不在收媒体的后缀里，不会被当成一张图收进去。
+        let readme = url.appendingPathComponent("使用说明.md")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            let text = """
+            # 媒体库
+
+            这个文件夹就是 App 的媒体库本身，目录结构对应分组和目录：
+
+                Media/2025 京都/大阪/IMG_0001.jpg   →  分组「2025 京都」→ 目录「大阪」
+                Media/视频/a.mp4                    →  分组「视频」→ 目录「未分类」
+
+            **直接在这里新建文件夹、丢照片视频就行**，回到 App 会自动收进去，
+            文件不会被搬走也不会改名。在这里删掉的，App 里也会跟着消失。
+
+            分组那一层是必须的：直接躺在 Media 根下的文件不会被收。
+            """
+            try? Data(text.utf8).write(to: readme, options: .atomic)
+        }
         return url
     }()
 
@@ -26,37 +46,6 @@ enum Paths {
     }()
 
     static let libraryFile = documents.appendingPathComponent("library.json")
-
-    /// 「导入」文件夹。Info.plist 开了文件共享，电脑用访达、手机用「文件」
-    /// 都能直接把照片视频拖进这里，App 回到前台就收走。
-    ///
-    /// 不直接扫 Documents 根目录：那里还躺着 library.json 和 Media/Posters，
-    /// 混在一起既容易误删，也分不清哪些是新拖进来的。
-    static let inbox: URL = {
-        let url = documents.appendingPathComponent("导入", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-
-        // 放一份说明。用 .md 而不是常见图片视频后缀，免得自己被收进去。
-        let readme = url.appendingPathComponent("使用说明.md")
-        if !FileManager.default.fileExists(atPath: readme.path) {
-            let text = """
-            # 导入
-
-            把照片和视频放进这个文件夹，回到 App 就会自动收进媒体库，
-            原文件随后会被删掉（已经存进 App 里了）。
-
-            文件夹结构会照搬成分组和目录：
-
-                导入/2025 京都/大阪/IMG_0001.jpg   →  分组「2025 京都」→ 目录「大阪」
-                导入/2025 京都/IMG_0002.jpg        →  分组「2025 京都」→ 目录「未分类」
-                导入/IMG_0003.jpg                  →  分组「电脑导入」→ 目录「未分类」
-
-            同名的分组和目录会直接复用，不会重复建。
-            """
-            try? Data(text.utf8).write(to: readme, options: .atomic)
-        }
-        return url
-    }()
 
     static func url(for asset: Asset) -> URL {
         media.appendingPathComponent(asset.fileName)
@@ -607,6 +596,41 @@ final class LibraryStore {
                                           taken: MediaLayout.names(in: dirURL))
         let relative = dir.isEmpty ? leaf : dir + "/" + leaf
         return (relative, dirURL.appendingPathComponent(leaf))
+    }
+
+    // MARK: 给磁盘对账用的小口子
+    //
+    // library 是 private(set)，同文件之外改不了。DiskSync 要按磁盘上的
+    // 实际目录名回填、要摘掉文件已经没了的记录，所以在这儿开三个口子，
+    // 而不是把整个 library 放开写。
+
+    /// 按磁盘上的目录名回填。磁盘那个才是权威——addGroup/addFolder 会自己
+    /// 洗名字避重，算出来的可能和磁盘上的不一样。
+    func setDirName(_ name: String, forGroup id: UUID) {
+        guard let i = library.groups.firstIndex(where: { $0.id == id }) else { return }
+        library.groups[i].dirName = name
+    }
+
+    func setDirName(_ name: String, forFolder id: UUID) {
+        guard let (gi, fi) = locate(folder: id) else { return }
+        library.groups[gi].folders[fi].dirName = name
+    }
+
+    /// 摘掉文件已经不在磁盘上的记录，返回摘掉几条
+    func removeAssets(notIn existing: Set<String>) -> Int {
+        var removed = 0
+        for gi in library.groups.indices {
+            for fi in library.groups[gi].folders.indices {
+                let before = library.groups[gi].folders[fi].assets.count
+                library.groups[gi].folders[fi].assets.removeAll { asset in
+                    let gone = !existing.contains(asset.fileName.lowercased())
+                    if gone { ThumbnailCache.shared.invalidate(asset.id) }
+                    return gone
+                }
+                removed += before - library.groups[gi].folders[fi].assets.count
+            }
+        }
+        return removed
     }
 
     private func removeFile(_ asset: Asset) {
