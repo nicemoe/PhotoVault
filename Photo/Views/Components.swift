@@ -78,7 +78,25 @@ struct AssetImage: View {
     var contentMode: ContentMode = .fill
 
     @State private var image: UIImage?
-    @State private var loaded = false
+    @State private var loaded: Bool
+
+    /// 建视图的时候就先问一次内存缓存。
+    ///
+    /// 原来一律等 .task 起来了才问：哪怕图早就在缓存里，也要先画一遍灰底、
+    /// 排一个任务、下一拍再把图塞进去重画一遍——每张图两次渲染加一次任务
+    /// 调度。目录网格一格四张图，往下滑每冒出一行就要付八次，
+    /// 「渲染出来很多小图」的时候那一顿就是这么来的。
+    ///
+    /// 命中缓存的话第一帧就带着图，任务里直接返回，一次渲染搞定。
+    /// 这个查询是一次 NSCache 取值，比它省下的那次渲染便宜得多。
+    init(asset: Asset, maxPixel: Int = 480, contentMode: ContentMode = .fill) {
+        self.asset = asset
+        self.maxPixel = maxPixel
+        self.contentMode = contentMode
+        let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel)
+        _image = State(initialValue: hit)
+        _loaded = State(initialValue: hit != nil)
+    }
 
     var body: some View {
         // 用 overlay 而不是 ZStack：填充模式下图片会溢出，
@@ -100,9 +118,17 @@ struct AssetImage: View {
             .clipped()
             .task(id: asset.id) {
                 if let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel) {
-                    image = hit
-                    loaded = true
+                    // 多半在 init 里就已经放进来了。同一张就别再赋一次值——
+                    // @State 不比较新旧，赋了就是一次白刷新。
+                    if image !== hit { image = hit }
+                    if !loaded { loaded = true }
                     return
+                }
+                // 走到这儿说明缓存里没有。手上还留着图的话，是这个格子被换给了
+                // 另一张（.task 的 id 变了），旧的那张不作数了。
+                if image != nil {
+                    image = nil
+                    loaded = false
                 }
                 let made = await ThumbnailCache.shared.thumbnail(for: asset, maxPixel: maxPixel)
                 guard !Task.isCancelled else { return }
@@ -116,56 +142,66 @@ struct AssetImage: View {
 
 struct CoverCollage: View {
     let assets: [Asset]
+    /// 画多大。拼贴是当场画成一张位图的，得知道尺寸；
+    /// 而这个数外面本来就按列宽算好了（CardGridLayout.side）。
+    let side: CGFloat
     var tint: Color = Theme.accent
     var emptyIcon: String = "photo.on.rectangle.angled"
-    var maxPixel: Int = 480
+
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: UIImage?
 
     private let gap: CGFloat = 2
 
+    /// 几张图在后台拼成一张，这里只画那一张。
+    ///
+    /// 原来是四个 AssetImage 摆成田字格，靠 SwiftUI 布局拼。问题是这一层
+    /// 卡在**渲染**上而不是解码上——图早就在内存里了，滑动照样顿：一个格子
+    /// 四张图就是四套图层、四次裁剪，还套在外面那层圆角裁剪里，而 LazyVGrid
+    /// 每滑出一行要一次性把整行的格子全建出来，那一帧的活是四倍。
+    /// 换成单图立刻就顺，差别全在这儿。
+    ///
+    /// 拼贴本来就是张不会动的图，没道理每次滑过都在渲染管线里重拼一遍。
+    /// 后台画成一张位图缓存起来，格子里就一张图，和单图一样轻，
+    /// 四宫格的样子还留着。
     var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-
-            switch assets.count {
-            case 0:
-                ZStack {
-                    tint.opacity(0.12)
+        Theme.fill
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else if assets.isEmpty {
                     Image(systemName: emptyIcon)
-                        .font(.system(size: min(w, h) * 0.26, weight: .regular))
+                        .resizable()
+                        .scaledToFit()
+                        // 相当于原来那句「边长的 26%」，只是不用去问边长
+                        .scaleEffect(0.3)
                         .foregroundStyle(tint.opacity(0.55))
-                }
-            case 1:
-                AssetImage(asset: assets[0], maxPixel: maxPixel)
-            case 2:
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: (w - gap) / 2)
-                    AssetImage(asset: assets[1], maxPixel: maxPixel).frame(width: (w - gap) / 2)
-                }
-            case 3:
-                HStack(spacing: gap) {
-                    AssetImage(asset: assets[0], maxPixel: maxPixel).frame(width: w * 0.62 - gap)
-                    VStack(spacing: gap) {
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(height: (h - gap) / 2)
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(height: (h - gap) / 2)
-                    }
-                }
-            default:
-                VStack(spacing: gap) {
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[0], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(width: (w - gap) / 2)
-                    }
-                    .frame(height: (h - gap) / 2)
-                    HStack(spacing: gap) {
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(width: (w - gap) / 2)
-                        AssetImage(asset: assets[3], maxPixel: 320).frame(width: (w - gap) / 2)
-                    }
-                    .frame(height: (h - gap) / 2)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(tint.opacity(0.12))
                 }
             }
-        }
-        .background(Theme.fill)
+            .clipped()
+            .task(id: cacheKey) {
+                guard !assets.isEmpty else {
+                    if image != nil { image = nil }
+                    return
+                }
+                let made = await ThumbnailCache.shared.collage(
+                    of: assets, side: side, gap: gap, scale: displayScale)
+                guard !Task.isCancelled else { return }
+                if image == nil {
+                    withAnimation(.easeOut(duration: 0.18)) { image = made }
+                } else {
+                    image = made
+                }
+            }
+    }
+
+    /// 换了图、换了尺寸都要重拼
+    private var cacheKey: String {
+        assets.prefix(4).map(\.id.uuidString).joined(separator: ",") + "@\(Int(side))"
     }
 }
 
@@ -177,19 +213,31 @@ struct GroupCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: group.coverAssets, tint: Theme.color(at: group.colorIndex))
+            CoverCollage(assets: group.coverAssets, side: side,
+                             tint: Theme.color(at: group.colorIndex))
                 .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
+                // 高度直接给死，不靠 aspectRatio 去谈。
+                //
+                // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
+                // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
+                // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
+                // side 本来就是按列宽算好的，用它就完了。
+                .frame(height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topLeading) {
-                    // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块
+                    // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块。
+                    //
+                    // 衬底原来是 .ultraThinMaterial。那是一层实时毛玻璃——要把
+                    // 背后的内容采样下来现场模糊，每帧都做。一屏六到九张卡片
+                    // 就是六到九次模糊，而这是首页独有的开销，目录卡片没有。
+                    // 二十点的小圆片，模糊和纯色差别肉眼分不出，代价却差很远。
                     Circle()
                         .fill(Theme.color(at: group.colorIndex))
                         .frame(width: 8, height: 8)
                         .padding(7)
                         .background(
                             Circle()
-                                .fill(.ultraThinMaterial)
+                                .fill(.white.opacity(0.82))
                                 .frame(width: 20, height: 20)
                         )
                         .padding(6)
@@ -238,19 +286,27 @@ struct FolderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
+            // 四宫格本身就在说「这是一摞」，不用再在背后垫一层露边。
+            // 那层是封面临时改成单图那阵子加的，图拼回来就多余了。
+            CoverCollage(assets: summary.covers, side: side, tint: tint, emptyIcon: "folder")
                 .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
+                // 高度直接给死，不靠 aspectRatio 去谈。
+                //
+                // 拼贴是一张当场画出来的位图，没有固有尺寸，这时候让 aspectRatio
+                // 把它摁成正方形要多走一轮尺寸协商，而 LazyVGrid 每滑出一行都要
+                // 新建一批格子，每格都付一次。side 本来就是按列宽算好的，用它就完了。
+                .frame(height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topTrailing) {
-                    if subfolderCount > 0 {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(6)
-                            .background(.black.opacity(0.35), in: Circle())
-                            .padding(8)
-                    }
+                    // 角标一律给。原来只在「有子目录」时才出现，于是末端那些
+                    // 只装文件的目录反倒没有任何标记——而一个只放了一张图的目录，
+                    // 拼出来就是一张图，正是最容易被当成照片的那种。
+                    Image(systemName: subfolderCount > 0 ? "folder.fill" : "square.stack.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.black.opacity(0.4), in: Circle())
+                        .padding(8)
                 }
 
             VStack(alignment: .leading, spacing: 3) {

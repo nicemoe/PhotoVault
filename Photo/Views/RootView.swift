@@ -233,10 +233,21 @@ struct RootView: View {
 
     private func syncDisk() async {
         let (added, removed) = await store.syncWithDisk()
-        guard added > 0 || removed > 0 else { return }
-        let parts = [added > 0 ? "收进 \(added) 个" : nil,
-                     removed > 0 ? "移除 \(removed) 个" : nil].compactMap { $0 }
-        toastItem = Toast(icon: "arrow.triangle.2.circlepath", text: parts.joined(separator: "，"))
+        if added > 0 || removed > 0 {
+            let parts = [added > 0 ? "收进 \(added) 个" : nil,
+                         removed > 0 ? "移除 \(removed) 个" : nil].compactMap { $0 }
+            toastItem = Toast(icon: "arrow.triangle.2.circlepath",
+                              text: parts.joined(separator: "，"))
+        }
+
+        // 对账完了接着把视频封面补齐。放在提示的 if 外面：绝大多数时候磁盘
+        // 上什么都没变，可封面该补还是要补——第一次装上来的时候，正是一个
+        // 都没有、而磁盘和索引完全对得上的状态。
+        //
+        // 抽帧是最贵的一步，而目录封面一张卡要四个视频的。等人滑到哪儿才抽
+        // 哪儿的话，第一次进分组就得盯着封面一格一格往外冒。提前抽，而且走
+        // 只有一个名额的那条队，永远排在人正在看的那一屏后面。
+        await store.backfillPosters()
     }
 
     // MARK: 加号菜单
