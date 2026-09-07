@@ -23,6 +23,8 @@ struct BookshelfView: View {
     @State private var toastItem: Toast?
     @State private var screenWidth: CGFloat = 0
     @State private var keyword = ""
+    /// 书架上先摆多少本，滑到底再续。见 visibleBooks。
+    @State private var shown = BookshelfView.pageSize
 
     private var layout: CardGridLayout {
         let width = screenWidth > 0 ? screenWidth : ScreenMetrics.fallbackWidth
@@ -31,13 +33,42 @@ struct BookshelfView: View {
                               preferredItemWidth: 160)
     }
 
-    private var visibleBooks: [Book] {
+    /// 一次往下放多少本。滑到底再续一批。
+    private static let pageSize = 100
+
+    private var matchedBooks: [Book] {
         let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return library.sortedBooks }
         return library.sortedBooks.filter {
             $0.title.localizedCaseInsensitiveContains(key)
                 || $0.author.localizedCaseInsensitiveContains(key)
         }
+    }
+
+    /// 真正交给 ForEach 的那一批。
+    ///
+    /// LazyVStack 本来就只渲染看得见的几行，但 ForEach 拿到的数组有多长，
+    /// 每次刷新就要比对多长——一千本书，改个设置、收进一本新书都要走一遍。
+    /// 排序在最前面，所以截掉的一定是最久没碰过的那些；读过的会被排到最前，
+    /// 不会因为截断而找不到。
+    private var visibleBooks: [Book] {
+        let all = matchedBooks
+        return all.count <= shown ? all : Array(all.prefix(shown))
+    }
+
+    /// 后面还有没有。visibleBooks 正好被截到 shown 这么长，就说明还有。
+    private var hasMore: Bool { visibleBooks.count >= shown }
+
+    /// 摆在书架末尾的哨兵：它露头就说明人滑到底了，再放一批出来。
+    ///
+    /// 不给每一行都挂 onAppear——那样每滚过一本书都要把一千本重排一遍，
+    /// 为了省渲染反而更贵。哨兵一屏最多出现一次。
+    private var loadMoreMarker: some View {
+        ProgressView()
+            .tint(Theme.secondaryLabel)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .onAppear { shown += Self.pageSize }
     }
 
     var body: some View {
@@ -69,6 +100,7 @@ struct BookshelfView: View {
                                 .contextMenu { menu(for: book) }
                             }
                         }
+                        if hasMore { loadMoreMarker }
                     } else {
                         LazyVStack(spacing: 10) {
                             ForEach(visibleBooks) { book in
@@ -81,6 +113,7 @@ struct BookshelfView: View {
                                 .contextMenu { menu(for: book) }
                             }
                         }
+                        if hasMore { loadMoreMarker }
                     }
                 }
                 .padding(.horizontal, Theme.Metric.margin)
@@ -90,6 +123,7 @@ struct BookshelfView: View {
             .scrollIndicators(.hidden)
             .readingWidth($screenWidth)
             .searchable(text: $keyword, prompt: "搜索书名或作者")
+            .onChange(of: keyword) { _, _ in shown = Self.pageSize }
             .navigationTitle("书架")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.background, for: .navigationBar)

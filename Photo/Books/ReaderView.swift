@@ -41,6 +41,11 @@ struct ReaderView: View {
     /// 免得把用户整台设备的亮度改了还不还
     @State private var systemBrightness: CGFloat?
 
+    /// 这本书的章节表。不在 books.json 里，打开书的时候单独取一次——
+    /// 一千本书的章节表加起来几百 MB，没道理为了画书架就全装进内存。
+    /// 取到之前正文没法排版，先摆一个「正在整理章节」。
+    @State private var chapters: [ChapterMeta] = []
+
     private var book: Book? { library.book(bookID) }
     private var settings: ReaderSettings { library.settings }
     private var theme: ReaderTheme { settings.theme }
@@ -52,10 +57,16 @@ struct ReaderView: View {
         ZStack {
             theme.background.ignoresSafeArea()
 
-            if let book {
+            if let book, !chapters.isEmpty {
                 // 不要 ignoresSafeArea：机身是圆角的，正文铺到物理边缘的话
                 // 最后一行和页码会被圆角切掉。只让背景色铺满，文字待在安全区内。
                 content(book)
+            } else if book != nil {
+                // 章节表还在路上。通常是读一个几十 KB 的文件，一闪而过；
+                // 只有第一次打开一本还没拆过的书（从旧版本升上来、或者内部
+                // 目录被清过）才要真等一下，那时候是在照着正文重拆。
+                ProgressView()
+                    .tint(theme.text.opacity(0.5))
             }
 
             if showChrome, let book {
@@ -64,7 +75,10 @@ struct ReaderView: View {
         }
         .statusBarHidden(!showChrome)
         .navigationBarHidden(true)
-        .task(id: bookID) { restoreProgress() }
+        .task(id: bookID) {
+            chapters = await library.chapters(of: bookID)
+            restoreProgress()
+        }
         .onChange(of: locator) { _, _ in saveProgress() }
         .onChange(of: settings.mode) { _, mode in
             if mode == .scroll {
@@ -108,7 +122,7 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $showChapters) {
             if let book {
-                ChapterListSheet(book: book, current: locator.chapter) { index in
+                ChapterListSheet(book: book, chapters: chapters, current: locator.chapter) { index in
                     jump(chapter: index, offset: 0, dismissingChrome: true)
                 } onPickBookmark: { mark in
                     jump(chapter: mark.chapterIndex, offset: mark.characterOffset, dismissingChrome: true)
@@ -121,7 +135,7 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $showSearch) {
             if let book {
-                BookSearchSheet(book: book) { hit in
+                BookSearchSheet(book: book, chapters: chapters) { hit in
                     jump(chapter: hit.chapterIndex, offset: hit.offset, dismissingChrome: true)
                 }
             }
@@ -205,7 +219,7 @@ struct ReaderView: View {
                 if let source = pageSource, let book {
                     ChapterScrollReader(
                         source: source,
-                        chapterTitles: book.chapters.map(\.title),
+                        chapterTitles: chapters.map(\.title),
                         settings: settings,
                         textColor: UIColor(theme.text),
                         chromeVisible: showChrome,
@@ -366,8 +380,8 @@ struct ReaderView: View {
 
     /// 本章读到百分之几
     private var chapterPercent: Int {
-        guard let book, book.chapters.indices.contains(locator.chapter) else { return 0 }
-        let total = max(1, book.chapters[locator.chapter].characterCount)
+        guard chapters.indices.contains(locator.chapter) else { return 0 }
+        let total = max(1, chapters[locator.chapter].characterCount)
         return min(100, max(0, currentOffset * 100 / total))
     }
 
@@ -413,8 +427,8 @@ struct ReaderView: View {
     // MARK: 数据
 
     private var currentChapterTitle: String {
-        guard let book, book.chapters.indices.contains(locator.chapter) else { return "" }
-        return book.chapters[locator.chapter].title
+        guard chapters.indices.contains(locator.chapter) else { return "" }
+        return chapters[locator.chapter].title
     }
 
     /// 建立/重建分页数据源。字号、行距、字体、页面尺寸变了都要重来，
@@ -433,7 +447,7 @@ struct ReaderView: View {
             existing.invalidate(settings: settings, textColor: color, pageSize: contentSize)
         } else {
             pageSource = PageSource(bookID: bookID,
-                                    chapters: book.chapters,
+                                    chapters: chapters,
                                     library: library,
                                     settings: settings,
                                     textColor: color,
@@ -466,7 +480,7 @@ struct ReaderView: View {
     ///   （目录、搜索）。上一章/下一章是可重复的顺序浏览，用户可能连点好几次
     ///   找位置，替他收起来等于替他断定「你不会再点了」。
     private func jump(chapter: Int, offset: Int, dismissingChrome: Bool = false) {
-        guard let book, book.chapters.indices.contains(chapter) else { return }
+        guard chapters.indices.contains(chapter) else { return }
         if let source = pageSource {
             locator = source.locator(chapter: chapter, offset: offset)
         } else {

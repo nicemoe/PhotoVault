@@ -5,6 +5,9 @@ import SwiftUI
 struct ChapterListSheet: View {
 
     let book: Book
+    /// 章节表从阅读页传进来。它不在 books.json 里，是打开书时单独取的，
+    /// 这儿再去取一遍等于多读一次盘。
+    let chapters: [ChapterMeta]
     let current: Int
     var onPick: (Int) -> Void
     var onPickBookmark: (Bookmark) -> Void
@@ -16,10 +19,10 @@ struct ChapterListSheet: View {
     /// 目录和书签放同一个面板，用分段切换，不额外占工具栏位置
     @State private var tab = 0
 
-    private var chapters: [ChapterMeta] {
+    private var visibleChapters: [ChapterMeta] {
         let base = keyword.isEmpty
-            ? book.chapters
-            : book.chapters.filter { $0.title.localizedCaseInsensitiveContains(keyword) }
+            ? chapters
+            : chapters.filter { $0.title.localizedCaseInsensitiveContains(keyword) }
         return reversed ? base.reversed() : base
     }
 
@@ -93,7 +96,7 @@ struct ChapterListSheet: View {
     private var chapterList: some View {
             ScrollViewReader { proxy in
                 List {
-                    ForEach(chapters) { chapter in
+                    ForEach(visibleChapters) { chapter in
                         Button {
                             onPick(chapter.index)
                             dismiss()
@@ -131,6 +134,7 @@ struct ChapterListSheet: View {
 struct BookSearchSheet: View {
 
     let book: Book
+    let chapters: [ChapterMeta]
     var onPick: (BookLibrary.SearchHit) -> Void
 
     @Environment(BookLibrary.self) private var library
@@ -201,7 +205,7 @@ struct BookSearchSheet: View {
         searching = true
         searched = true
         Task {
-            let found = await library.search(fileName: book.sourceName, chapters: book.chapters, keyword: key)
+            let found = await library.search(fileName: book.sourceName, chapters: chapters, keyword: key)
             hits = found
             searching = false
         }

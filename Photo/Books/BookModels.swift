@@ -20,8 +20,17 @@ enum BookFormat: String, Codable {
 /// 整本书是 Books 下的一个 UTF-8 文件，读某一章就是 seek 到 byteOffset、
 /// 读 byteLength 个字节、按 UTF-8 解出来。偏移是拆分那一刻算好的，
 /// 天然落在字符边界上，不存在把一个多字节字劈开的问题。
+///
+/// 这些不进 books.json——一本 1600 章的书光章节表就 270 KB，一千本就是
+/// 270 MB，而它每次保存都要整个重写一遍。章节表按书单独存（见 BookPaths），
+/// 打开哪本读哪本。
 struct ChapterMeta: Identifiable, Codable, Hashable {
-    var id = UUID()
+    /// index 本身就是这一章的身份，不用再发一个 UUID。
+    ///
+    /// 原来这里是个存下来的 UUID，编码出来占单章 168 字节里的 47——
+    /// 全是为了满足 Identifiable，而列表里区分两章靠的本来就是章序。
+    var id: Int { index }
+
     var index: Int
     var title: String
     var characterCount: Int
@@ -30,9 +39,8 @@ struct ChapterMeta: Identifiable, Codable, Hashable {
     /// 正文占多少字节
     var byteLength: Int = 0
 
-    init(id: UUID = UUID(), index: Int, title: String, characterCount: Int,
+    init(index: Int, title: String, characterCount: Int,
          byteOffset: Int = 0, byteLength: Int = 0) {
-        self.id = id
         self.index = index
         self.title = title
         self.characterCount = characterCount
@@ -41,15 +49,18 @@ struct ChapterMeta: Identifiable, Codable, Hashable {
     }
 
     /// 手写解码。Swift 合成的 Decodable 不拿属性默认值兜缺失的键，直接抛错——
-    /// 加了字段之后旧的 books.json 会整个解不出来，书架被清空。
+    /// 加了字段之后旧的章节表会整个解不出来。
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         characterCount = try c.decodeIfPresent(Int.self, forKey: .characterCount) ?? 0
         byteOffset = try c.decodeIfPresent(Int.self, forKey: .byteOffset) ?? 0
         byteLength = try c.decodeIfPresent(Int.self, forKey: .byteLength) ?? 0
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case index, title, characterCount, byteOffset, byteLength
     }
 }
 
@@ -60,7 +71,30 @@ struct ChapterMeta: Identifiable, Codable, Hashable {
 struct ReadingProgress: Codable, Hashable {
     var chapterIndex: Int = 0
     var characterOffset: Int = 0
+    /// 这一章之前累计多少字。书架上那个百分比要用。
+    ///
+    /// 本来是拿章节表现算的（把前面每章的字数加起来），但章节表已经不在
+    /// 内存里了——为了画一个百分比去读一遍全书的章节表，太亏。这个数只有
+    /// 翻章时才变，而翻章的时候章节表正好在手上，顺手算一下存住。
+    var charactersBefore: Int = 0
     var updatedAt: Date = Date()
+
+    init(chapterIndex: Int = 0, characterOffset: Int = 0,
+         charactersBefore: Int = 0, updatedAt: Date = Date()) {
+        self.chapterIndex = chapterIndex
+        self.characterOffset = characterOffset
+        self.charactersBefore = charactersBefore
+        self.updatedAt = updatedAt
+    }
+
+    /// 同样要手写：合成的解码碰上旧数据里没有 charactersBefore 会直接抛错
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chapterIndex = try c.decodeIfPresent(Int.self, forKey: .chapterIndex) ?? 0
+        characterOffset = try c.decodeIfPresent(Int.self, forKey: .characterOffset) ?? 0
+        charactersBefore = try c.decodeIfPresent(Int.self, forKey: .charactersBefore) ?? 0
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
 }
 
 /// 书签。存章节 + 章内字符偏移，和阅读进度同一套定位方式，
@@ -92,7 +126,8 @@ struct Book: Identifiable, Codable, Hashable {
     var author: String = ""
     var format: BookFormat
     var addedAt: Date = Date()
-    var chapters: [ChapterMeta] = []
+    /// 共多少章。章节表本身按书单独存，这里只留书架和目录标题要显示的那个数。
+    var chapterCount: Int = 0
     var totalCharacters: Int = 0
     var progress = ReadingProgress()
     /// 封面色，按书名哈希取，避免每本书都长一样
@@ -102,7 +137,7 @@ struct Book: Identifiable, Codable, Hashable {
     init(id: UUID = UUID(), title: String,
          sourceName: String = "", textBytes: Int = 0,
          author: String = "", format: BookFormat,
-         addedAt: Date = Date(), chapters: [ChapterMeta] = [], totalCharacters: Int = 0,
+         addedAt: Date = Date(), chapterCount: Int = 0, totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
         self.id = id
@@ -112,7 +147,7 @@ struct Book: Identifiable, Codable, Hashable {
         self.author = author
         self.format = format
         self.addedAt = addedAt
-        self.chapters = chapters
+        self.chapterCount = chapterCount
         self.totalCharacters = totalCharacters
         self.progress = progress
         self.colorIndex = colorIndex
@@ -131,24 +166,28 @@ struct Book: Identifiable, Codable, Hashable {
         author = try c.decodeIfPresent(String.self, forKey: .author) ?? ""
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
-        chapters = try c.decodeIfPresent([ChapterMeta].self, forKey: .chapters) ?? []
+        chapterCount = try c.decodeIfPresent(Int.self, forKey: .chapterCount) ?? 0
         totalCharacters = try c.decodeIfPresent(Int.self, forKey: .totalCharacters) ?? 0
         progress = try c.decodeIfPresent(ReadingProgress.self, forKey: .progress) ?? ReadingProgress()
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
     }
 
-    var chapterCount: Int { chapters.count }
-
     /// 0...1
     var progressRatio: Double {
         guard totalCharacters > 0 else { return 0 }
-        let before = chapters.prefix(progress.chapterIndex).reduce(0) { $0 + $1.characterCount }
-        return min(1, Double(before + progress.characterOffset) / Double(totalCharacters))
+        // charactersBefore 是翻章时顺手记下的。老数据里没有，退回按章序估——
+        // 章长不均，估得糙一点，但书架上那根进度条不至于一直停在 0
+        if progress.charactersBefore > 0 || progress.chapterIndex == 0 {
+            return min(1, Double(progress.charactersBefore + progress.characterOffset)
+                       / Double(totalCharacters))
+        }
+        guard chapterCount > 0 else { return 0 }
+        return min(1, Double(progress.chapterIndex) / Double(chapterCount))
     }
 
     var progressText: String {
-        guard !chapters.isEmpty else { return "未开始" }
+        guard chapterCount > 0 else { return "未开始" }
         if progressRatio <= 0 { return "未开始" }
         return String(format: "已读 %.0f%%", progressRatio * 100)
     }

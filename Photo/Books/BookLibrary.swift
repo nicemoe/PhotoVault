@@ -3,11 +3,15 @@ import Observation
 
 /// 书在磁盘上怎么摆。
 ///
-///     Documents/
+///     Documents/                 ← 访达里看得到的，全是人自己的东西
 ///       Books/
 ///         斗破苍穹.txt          ← 一本书就一个文件，UTF-8
 ///         三体.txt
-///       books.json              ← 每章：标题 + 起始字节 + 长度
+///       books.json              ← 书目 + 阅读进度 + 书签
+///
+///     Library/Application Support/   ← App 内部，访达里看不到
+///       Chapters/
+///         <书的 id>.json        ← 这本书每章的标题 + 起始字节 + 长度
 ///
 /// 一本书一个文件，不再按章拆成几百个小文件。
 ///
@@ -54,6 +58,28 @@ enum BookPaths {
 
     static func file(named name: String) -> URL {
         root.appendingPathComponent(name)
+    }
+
+    /// 章节表放这儿，一本书一个文件。
+    ///
+    /// 不进 books.json，因为它太大又太不常变：一本 1600 章的书章节表就
+    /// 270 KB，一千本 270 MB，而 books.json 每翻一页都要整个重写一遍——
+    /// 一小时阅读能写掉几十 GB。分开之后 books.json 只剩书目和进度，
+    /// 一千本约 460 KB，章节表只在打开那本书时读。
+    ///
+    /// 也不放 Documents：它是照着正文算出来的派生数据，不是人的东西，
+    /// 访达里不该看见，丢了也能重拆。用 Application Support 而不是
+    /// Caches——Caches 系统会挑时候清掉，清一次就是一千本书重拆一遍。
+    static let chaptersRoot: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        let url = base.appendingPathComponent("Chapters", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    static func chapterFile(for bookID: UUID) -> URL {
+        chaptersRoot.appendingPathComponent(bookID.uuidString + ".json")
     }
 }
 
@@ -147,6 +173,10 @@ final class BookLibrary {
     /// 正在扫书库。挡住重入，见 importLooseFiles。
     private var isScanning = false
 
+    /// 手上摊开的那本书的章节表。一次只留一本——人不会同时读两本，
+    /// 而每本几百 KB，全留着就等于把搬出去的东西又搬回内存里。
+    private var openBook: (id: UUID, chapters: [ChapterMeta])?
+
     init() {
         load()
     }
@@ -217,13 +247,37 @@ final class BookLibrary {
 
     func book(_ id: UUID) -> Book? { books.first { $0.id == id } }
 
-    /// 按需读某一章的正文。
+    /// 某本书的章节表。打开书时来一次，之后就在手上了。
+    ///
+    /// 三级：手上这本直接给；不是的话从 App 内部目录读那本的章节表；
+    /// 再没有（第一次跑这个版本、内部目录被清过）就照着正文重拆一遍。
+    /// 最后这条路让章节表变成纯粹的缓存——丢了不影响能不能读，只是慢一次。
+    func chapters(of bookID: UUID) async -> [ChapterMeta] {
+        if let openBook, openBook.id == bookID { return openBook.chapters }
+        guard let book = book(bookID) else { return [] }
+
+        let stored = await Task.detached(priority: .userInitiated) {
+            Self.readChapters(bookID: bookID)
+        }.value
+        if !stored.isEmpty {
+            openBook = (bookID, stored)
+            return stored
+        }
+
+        guard let rebuilt = await rebuildChapters(for: book), !rebuilt.isEmpty else { return [] }
+        openBook = (bookID, rebuilt)
+        return rebuilt
+    }
+
+    /// 按需读某一章的正文。走手上那本的章节表，所以只在书打开着的时候有效——
+    /// 而会问这个的（分页、书签摘录）本来就只在阅读页里。
     ///
     /// 真正干活的是下面那个 nonisolated 版本：全文搜索要在后台跑，
     /// 读不到 @MainActor 的 books，所以由调用方先把文件名和章节信息取出来。
     func chapterText(bookID: UUID, index: Int) -> String {
-        guard let book = book(bookID), book.chapters.indices.contains(index) else { return "" }
-        return Self.chapterText(fileName: book.sourceName, chapter: book.chapters[index])
+        guard let book = book(bookID), let openBook, openBook.id == bookID,
+              openBook.chapters.indices.contains(index) else { return "" }
+        return Self.chapterText(fileName: book.sourceName, chapter: openBook.chapters[index])
     }
 
     /// seek 到偏移，读这一章那几万字节，解成字符串。
@@ -310,18 +364,24 @@ final class BookLibrary {
             FileNames.sanitize(parsed.title),
             taken: Set(books.map { ($0.sourceName as NSString).deletingPathExtension }))
 
+        let bookID = UUID()
         let built = await Task.detached(priority: .userInitiated) {
             () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
-            Self.writeText(chapters: chapters, stem: stem, replacing: url)
+            guard let made = Self.writeText(chapters: chapters, stem: stem, replacing: url)
+            else { return nil }
+            // 章节表跟着一起落盘，不进 books.json
+            Self.writeChapters(made.metas, for: bookID)
+            return made
         }.value
         guard let built else { throw ImportError.empty }
 
-        let book = Book(title: parsed.title,
+        let book = Book(id: bookID,
+                        title: parsed.title,
                         sourceName: built.name,
                         textBytes: built.bytes,
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
-                        chapters: built.metas,
+                        chapterCount: built.metas.count,
                         totalCharacters: built.characters,
                         colorIndex: abs(parsed.title.hashValue) % Theme.paletteHex.count)
 
@@ -432,37 +492,73 @@ final class BookLibrary {
 
         var done = 0
         for (id, name) in stale {
-            // 每轮都重新找一遍下标：这中间 await 过，books 可能已经变了
-            guard let i = books.firstIndex(where: { $0.id == id }),
-                  books[i].sourceName == name else { continue }
-            importing?.title = books[i].title
-
-            let built = await Task.detached(priority: .userInitiated) {
-                () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
-                let url = BookPaths.file(named: name)
-                guard let data = try? Data(contentsOf: url),
-                      let text = TextDecoding.decode(data) else { return nil }
-                let chapters = ChapterSplitter.split(text)
-                guard !chapters.isEmpty else { return nil }
-                return Self.writeText(chapters: chapters,
-                                      stem: (name as NSString).deletingPathExtension,
-                                      replacing: url)
-            }.value
+            // 每轮都重新找一遍：这中间 await 过，books 可能已经变了
+            guard let book = book(id), book.sourceName == name else { continue }
+            importing?.title = book.title
+            let rebuilt = await rebuildChapters(for: book)
             importing?.done += 1
 
-            guard let built, let j = books.firstIndex(where: { $0.id == id }) else { continue }
-            books[j].sourceName = built.name
-            books[j].textBytes = built.bytes
-            books[j].chapters = built.metas
-            books[j].totalCharacters = built.characters
-            if books[j].progress.chapterIndex >= built.metas.count {
-                books[j].progress.chapterIndex = max(0, built.metas.count - 1)
-                books[j].progress.characterOffset = 0
+            guard let rebuilt, let j = books.firstIndex(where: { $0.id == id }) else { continue }
+            // 章少了的话，进度可能指着一章已经不存在的地方，夹回范围内
+            if books[j].progress.chapterIndex >= rebuilt.count {
+                books[j].progress = ReadingProgress(
+                    chapterIndex: max(0, rebuilt.count - 1), updatedAt: books[j].progress.updatedAt)
             }
             done += 1
         }
         if done > 0 { saveNow() }
         return done
+    }
+
+    /// 照着正文重拆一遍，章节表跟着更新。
+    ///
+    /// 三种情况会走到这儿：文件在访达里被改过、章节表丢了（内部目录被清、
+    /// 从旧版本升上来）、以及第一次打开一本还没有章节表的书。
+    /// 三种都是同一件事——正文才是真的，章节表照着它重算。
+    @discardableResult
+    private func rebuildChapters(for book: Book) async -> [ChapterMeta]? {
+        let name = book.sourceName
+        guard !name.isEmpty else { return nil }
+        let bookID = book.id
+
+        let built = await Task.detached(priority: .userInitiated) {
+            () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
+            let url = BookPaths.file(named: name)
+            guard let data = try? Data(contentsOf: url),
+                  let text = TextDecoding.decode(data) else { return nil }
+            let chapters = ChapterSplitter.split(text)
+            guard !chapters.isEmpty else { return nil }
+            guard let made = Self.writeText(chapters: chapters,
+                                            stem: (name as NSString).deletingPathExtension,
+                                            replacing: url) else { return nil }
+            Self.writeChapters(made.metas, for: bookID)
+            return made
+        }.value
+        guard let built else { return nil }
+
+        if let i = books.firstIndex(where: { $0.id == bookID }) {
+            books[i].sourceName = built.name
+            books[i].textBytes = built.bytes
+            books[i].chapterCount = built.metas.count
+            books[i].totalCharacters = built.characters
+            saveNow()
+        }
+        if openBook?.id == bookID { openBook = (bookID, built.metas) }
+        return built.metas
+    }
+
+    // MARK: 章节表的读写
+
+    nonisolated private static func writeChapters(_ list: [ChapterMeta], for bookID: UUID) {
+        guard let data = try? Coders.makeEncoder().encode(list) else { return }
+        try? data.write(to: BookPaths.chapterFile(for: bookID), options: .atomic)
+    }
+
+    nonisolated private static func readChapters(bookID: UUID) -> [ChapterMeta] {
+        guard let data = try? Data(contentsOf: BookPaths.chapterFile(for: bookID)),
+              let list = try? Coders.makeDecoder().decode([ChapterMeta].self, from: data)
+        else { return [] }
+        return list
     }
 
     /// 正文文件在书库里被删掉了，书也跟着走。
@@ -483,6 +579,10 @@ final class BookLibrary {
         guard !doomed.isEmpty else { return 0 }
 
         let doomedIDs = Set(doomed.map(\.id))
+        for id in doomedIDs {
+            try? FileManager.default.removeItem(at: BookPaths.chapterFile(for: id))
+        }
+        if let openBook, doomedIDs.contains(openBook.id) { self.openBook = nil }
         books.removeAll { doomedIDs.contains($0.id) }
         saveNow()
         return doomed.count
@@ -643,8 +743,17 @@ final class BookLibrary {
 
     func updateProgress(bookID: UUID, chapterIndex: Int, characterOffset: Int) {
         guard let i = books.firstIndex(where: { $0.id == bookID }) else { return }
+        // 书架上那个百分比要「这一章之前累计多少字」。章节表正好在手上，
+        // 顺手加一遍存住，省得画书架时为了一个百分比去读全书的章节表。
+        let before: Int
+        if let openBook, openBook.id == bookID, chapterIndex <= openBook.chapters.count {
+            before = openBook.chapters.prefix(chapterIndex).reduce(0) { $0 + $1.characterCount }
+        } else {
+            before = books[i].progress.charactersBefore
+        }
         books[i].progress = ReadingProgress(chapterIndex: chapterIndex,
                                             characterOffset: characterOffset,
+                                            charactersBefore: before,
                                             updatedAt: Date())
         scheduleSave()
     }
@@ -711,6 +820,8 @@ final class BookLibrary {
         if !removed.sourceName.isEmpty {
             try? FileManager.default.removeItem(at: BookPaths.file(named: removed.sourceName))
         }
+        try? FileManager.default.removeItem(at: BookPaths.chapterFile(for: removed.id))
+        if openBook?.id == removed.id { openBook = nil }
         saveNow()
     }
 }
