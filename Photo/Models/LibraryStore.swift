@@ -207,6 +207,23 @@ final class LibraryStore {
         return nil
     }
 
+    /// 记下这个视频该用哪个解码器。
+    ///
+    /// 是人在播放页上按出来的：默认那套按封装猜，猜不中的（比如被强行转过壳、
+    /// 扩展名写着 mp4 里面却是 Xvid）会花屏，切一次就记住，下次直接用对的。
+    func setDecoder(_ choice: DecoderChoice, for assetID: UUID) {
+        for gi in library.groups.indices {
+            for fi in library.groups[gi].folders.indices {
+                guard let ai = library.groups[gi].folders[fi].assets
+                    .firstIndex(where: { $0.id == assetID }) else { continue }
+                guard library.groups[gi].folders[fi].assets[ai].decoder != choice else { return }
+                library.groups[gi].folders[fi].assets[ai].decoder = choice
+                saveNow()
+                return
+            }
+        }
+    }
+
     // MARK: 分组
 
     @discardableResult

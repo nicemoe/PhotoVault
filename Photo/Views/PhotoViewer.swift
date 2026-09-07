@@ -199,7 +199,8 @@ struct PhotoViewer: View {
                   onLeave: { time in
                       resumeAsset = asset.id
                       resumeTime = time
-                  })
+                  },
+                  onDecoderChange: { store.setDecoder($0, for: asset.id) })
     }
 
     /// 相邻的那一个。到头了返回 nil，播放器把按钮置灰。

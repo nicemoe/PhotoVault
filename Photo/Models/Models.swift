@@ -8,6 +8,29 @@ enum AssetKind: String, Codable, Hashable {
     case video
 }
 
+/// 这个文件用哪个解码器。
+///
+/// 有 auto 还要有手动的两档，是因为花屏这件事程序判断不了：AVFoundation
+/// 把一个它不会解的编码画成马赛克时，不报错、不失败，从代码里看和正常播放
+/// 一模一样。而封装名也只能猜个大概——被人强行转过壳的 mp4 里塞着 Xvid，
+/// 扩展名是 mp4，照样花。所以最后得留一个开关给眼睛用。
+enum DecoderChoice: String, Codable, CaseIterable {
+    /// 按封装猜。见 MediaFormats.prefersSoftware
+    case auto
+    /// 硬件解码，省电、seek 跟手
+    case hardware
+    /// KSPlayer + FFmpeg，什么都能解，费电
+    case software
+
+    var label: String {
+        switch self {
+        case .auto:     return "自动"
+        case .hardware: return "硬解"
+        case .software: return "软解"
+        }
+    }
+}
+
 struct Asset: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     /// 存放在 Documents/Media/ 下的文件名
@@ -20,6 +43,8 @@ struct Asset: Identifiable, Codable, Hashable {
     var width: Int = 0
     var height: Int = 0
     var byteCount: Int = 0
+    /// 用哪个解码器。默认 auto，看着花屏就手动切一次，记在这儿。
+    var decoder: DecoderChoice = .auto
     /// 视频时长（秒）；图片是 0
     var duration: Double = 0
     var createdAt: Date = Date()
@@ -53,6 +78,8 @@ struct Asset: Identifiable, Codable, Hashable {
         byteCount = try c.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
         duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        // 写 self.：这个初始化方法的参数正好也叫 decoder，不写就指到参数上了
+        self.decoder = try c.decodeIfPresent(DecoderChoice.self, forKey: .decoder) ?? .auto
     }
 
     var isVideo: Bool { kind == .video }

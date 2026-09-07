@@ -36,8 +36,10 @@ protocol VideoEngine: AnyObject {
     var onDuration: ((Double) -> Void)? { get set }
     /// 播完了
     var onFinish: (() -> Void)? { get set }
-    /// 起不来。硬解引擎不会报——AVFoundation 解不了的文件在导入时就被
-    /// 认出来了，压根不会走到它这儿。
+    /// 起不来。
+    ///
+    /// 两个引擎都会报。硬解报了不代表这个文件放不了——上层会换软解再试一次，
+    /// 软解也报才是真的解不开。
     var onFailure: (() -> Void)? { get set }
 }
 
@@ -114,6 +116,7 @@ final class AVEngine: VideoEngine {
     private let host = PlayerHostView()
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var statusObserver: NSKeyValueObservation?
     private var rate: Float = 1
 
     /// 拖动时的 seek 泵。
@@ -163,6 +166,17 @@ final class AVEngine: VideoEngine {
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.onFinish?() }
+        }
+
+        // 解不开就报上去，上层会换软解再试。
+        //
+        // 注意这只兜得住「AVFoundation 自己知道自己不行」的那一半：真正难办的
+        // 是它自以为行——把一个不会解的编码画成马赛克，status 一路 .readyToPlay，
+        // 从代码里看和正常播放毫无区别。那一半只能靠封装名先避开，
+        // 再不行就得人自己切一下。
+        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in self?.onFailure?() }
         }
     }
 
@@ -216,6 +230,8 @@ final class AVEngine: VideoEngine {
         endObserver = nil
         player.pause()
         host.player = nil
+        statusObserver?.invalidate()
+        statusObserver = nil
     }
 }
 
