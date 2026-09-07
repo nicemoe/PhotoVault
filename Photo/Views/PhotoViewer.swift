@@ -208,12 +208,12 @@ struct PhotoViewer: View {
                   // 存进索引的位置——那才是「上次看到哪儿了」。
                   startAt: resumeAsset == asset.id ? resumeTime : asset.resumeAt,
                   announceResume: resumeAsset != asset.id && asset.resumeAt > 0,
-                  onPlaybackChange: { videoPlaying = $0 },
                   onLeave: { time in
                       resumeAsset = asset.id
                       resumeTime = time
                       store.setPlayback(time, for: asset.id)
-                  })
+                  },
+                  onPlaybackChange: { videoPlaying = $0 })
     }
 
     private func refreshIdleTimer() {
