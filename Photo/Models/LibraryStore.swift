@@ -64,6 +64,9 @@ final class LibraryStore {
 
     private(set) var library = Library()
 
+    /// 正在和磁盘对账。挡住重入，见 syncWithDisk。
+    var isSyncing = false
+
     nonisolated static func fileURL(for asset: Asset) -> URL { Paths.url(for: asset) }
     nonisolated static func posterURL(for assetID: UUID) -> URL { Paths.poster(for: assetID) }
 

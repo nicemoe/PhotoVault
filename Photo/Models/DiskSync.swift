@@ -21,6 +21,12 @@ extension LibraryStore {
     /// 返回 (收进来的, 清出去的)。
     @discardableResult
     func syncWithDisk() async -> (added: Int, removed: Int) {
+        // 两个触发点（视图首次出现、从后台切回前台）可能挨着来。不挡一下的话
+        // 两次扫描会看到同一批新文件，各自入库一遍，同一个文件出现两条记录。
+        guard !isSyncing else { return (0, 0) }
+        isSyncing = true
+        defer { isSyncing = false }
+
         // 扫盘甩到后台：一万张照片走一遍目录树要几百毫秒，
         // 压在主线程上每次切回前台都要顿一下
         let onDisk = await Task.detached(priority: .utility) { Self.scanMedia() }.value
