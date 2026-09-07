@@ -85,6 +85,9 @@ final class LibraryStore {
     /// 正在和磁盘对账。挡住重入，见 syncWithDisk。
     var isSyncing = false
 
+    /// 正在后台补视频封面。挡住重入，见 backfillPosters。
+    var isBackfilling = false
+
     nonisolated static func fileURL(for asset: Asset) -> URL { Paths.url(for: asset) }
     nonisolated static func posterURL(for assetID: UUID) -> URL { Paths.poster(for: assetID) }
 

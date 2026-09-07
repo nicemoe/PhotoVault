@@ -106,6 +106,34 @@ final class ThumbnailCache: @unchecked Sendable {
         return Self.downsample(url: LibraryStore.fileURL(for: asset), maxPixel: maxPixel)
     }
 
+    /// 趁没人看的时候，把还没有封面的视频一个个抽好。
+    ///
+    /// 目录封面是四宫格，一张卡片要四个视频的封面。等滑到哪儿才抽哪儿的话，
+    /// 第一次进一个分组就是四五十次抽帧排着队，封面得一格一格慢慢冒出来。
+    /// 提前抽好之后，那一屏就只剩四五十次 JPEG 解码——便宜一个数量级。
+    ///
+    /// 一个一个来，走的是和按需抽帧同一条只有一个名额的队：它不该和人正在
+    /// 看的那一屏抢 CPU，人要的那张永远排在前面。
+    func backfillPosters(for assets: [Asset]) async {
+        for asset in assets {
+            if Task.isCancelled { return }
+            await ensurePoster(for: asset)
+        }
+    }
+
+    /// 这个视频在盘上有封面吗？没有就抽一张。
+    /// 不进内存缓存——补的多半是屏幕上还看不到的那些，占着缓存反而把
+    /// 眼前要用的挤出去。
+    private func ensurePoster(for asset: Asset) async {
+        guard asset.isVideo else { return }
+        guard !FileManager.default.fileExists(
+            atPath: LibraryStore.posterURL(for: asset.id).path) else { return }
+
+        await Self.posterGate.enter()
+        _ = await extractPoster(asset, maxPixel: Self.posterSide)
+        await Self.posterGate.leave()
+    }
+
     /// 统一按这个尺寸抽封面，各处再各自降采样，避免同一个视频抽好几遍
     private static let posterSide = 720
 

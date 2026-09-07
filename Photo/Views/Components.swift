@@ -303,7 +303,11 @@ struct FolderCard: View {
                     .padding(.horizontal, 11)
                     .offset(y: -6)
 
-                CoverCollage(assets: Array(summary.covers.prefix(1)), tint: tint, emptyIcon: "folder")
+                // 四宫格。贵的从来不是画四张图，是给四个视频各抽一帧
+                // （开解码器解一帧，一百到三百毫秒）。那一步挪到后台提前做完了
+                // （见 backfillPosters），这里剩下的就是四次读盘解图，
+                // 和一张图差不了多少。
+                CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
                     .frame(maxWidth: .infinity)
                     // 高度直接给死，不靠 aspectRatio 去谈。
                     //

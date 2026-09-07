@@ -71,6 +71,29 @@ extension LibraryStore {
         return (added, removed)
     }
 
+    /// 把库里所有视频的封面提前抽好。
+    ///
+    /// 抽帧是这条链上最贵的一步（开解码器解一帧，一百到三百毫秒），而目录
+    /// 封面一张卡要四个。等人滑到哪儿才抽哪儿，第一次进分组就得盯着封面
+    /// 一格一格往外冒。提前抽完，之后所有列表都只是读盘解图。
+    ///
+    /// 每次对账之后跑一次。全都有封面时它就是每个视频一次 fileExists，
+    /// 而且在后台线程上，白跑一趟也不疼。
+    func backfillPosters() async {
+        guard !isBackfilling else { return }
+        isBackfilling = true
+        defer { isBackfilling = false }
+
+        var videos: [Asset] = []
+        for group in library.groups {
+            for folder in group.folders {
+                for asset in folder.assets where asset.isVideo { videos.append(asset) }
+            }
+        }
+        guard !videos.isEmpty else { return }
+        await ThumbnailCache.shared.backfillPosters(for: videos)
+    }
+
     /// Posters 里认不出主人的封面一律清掉
     nonisolated private static func sweepPosters(keeping live: Set<String>) {
         let fm = FileManager.default
