@@ -91,7 +91,6 @@ final class LibraryStore {
             return
         }
         library = decoded
-        migrateToNamedLayout()
     }
 
     private var saveTask: Task<Void, Never>?
@@ -608,80 +607,6 @@ final class LibraryStore {
                                           taken: MediaLayout.names(in: dirURL))
         let relative = dir.isEmpty ? leaf : dir + "/" + leaf
         return (relative, dirURL.appendingPathComponent(leaf))
-    }
-
-    /// 老版本把所有文件平铺在 Media 下、名字一律是 UUID。
-    ///
-    /// 那样最省事，但开了文件共享之后从访达看到的就是一堆
-    /// `E621E1F8-….jpg`，导出来完全没法用。这里把已经进来的东西搬到
-    /// 新布局：按分组和目录建好文件夹，文件改回导入时的原名。
-    ///
-    /// 只会跑一次——搬完路径里就带 `/` 了，下次启动直接跳过。
-    private func migrateToNamedLayout() {
-        var changed = false
-
-        // 先给还没有目录名的分组和目录补上
-        for gi in library.groups.indices {
-            if library.groups[gi].dirName.isEmpty {
-                let taken = Set(library.groups.enumerated().compactMap {
-                    $0.offset == gi ? nil : $0.element.dirName
-                })
-                library.groups[gi].dirName = MediaLayout.unique(
-                    MediaLayout.sanitize(library.groups[gi].name), taken: taken)
-                changed = true
-            }
-            for fi in library.groups[gi].folders.indices where library.groups[gi].folders[fi].dirName.isEmpty {
-                let parent = library.groups[gi].folders[fi].parentID
-                let taken = Set(library.groups[gi].folders.enumerated().compactMap {
-                    ($0.offset == fi || $0.element.parentID != parent) ? nil : $0.element.dirName
-                })
-                library.groups[gi].folders[fi].dirName = MediaLayout.unique(
-                    MediaLayout.sanitize(library.groups[gi].folders[fi].name), taken: taken)
-                changed = true
-            }
-        }
-
-        // 再把平铺的文件搬进去
-        for gi in library.groups.indices {
-            for fi in library.groups[gi].folders.indices {
-                let folderID = library.groups[gi].folders[fi].id
-                guard let dir = dirPath(ofFolder: folderID) else { continue }
-                let dirURL = Paths.media.appendingPathComponent(dir)
-
-                // 目录里已有的名字只列一次，边搬边加。每个文件都去列一遍目录
-                // 的话，一个上千张的目录就是上千次全量列举。
-                var taken: Set<String>?
-
-                for ai in library.groups[gi].folders[fi].assets.indices {
-                    let asset = library.groups[gi].folders[fi].assets[ai]
-                    // 路径里带 / 的说明已经是新布局了
-                    guard !asset.fileName.contains("/") else { continue }
-                    let src = Paths.media.appendingPathComponent(asset.fileName)
-                    guard FileManager.default.fileExists(atPath: src.path) else { continue }
-
-                    if taken == nil {
-                        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-                        taken = MediaLayout.names(in: dirURL)
-                    }
-
-                    // 原名是导入时存下来的，不含扩展名；一个都没有就只能沿用
-                    // 那串 UUID，至少扩展名是对的
-                    let ext = (asset.fileName as NSString).pathExtension
-                    let stem = asset.originalName.isEmpty
-                        ? (asset.fileName as NSString).deletingPathExtension
-                        : MediaLayout.sanitize(asset.originalName)
-                    let leaf = MediaLayout.uniqueFile(stem: stem, ext: ext, taken: taken ?? [])
-                    taken?.insert(leaf)
-
-                    guard (try? FileManager.default.moveItem(
-                        at: src, to: dirURL.appendingPathComponent(leaf))) != nil else { continue }
-                    library.groups[gi].folders[fi].assets[ai].fileName = dir + "/" + leaf
-                    changed = true
-                }
-            }
-        }
-
-        if changed { saveNow() }
     }
 
     private func removeFile(_ asset: Asset) {
