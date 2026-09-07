@@ -156,6 +156,9 @@ final class BookLibrary {
     /// 导入进度，nil 表示没有在导入
     private(set) var importingTitle: String?
 
+    /// 正在扫 Local。挡住重入，见 importLooseFiles。
+    private var isScanning = false
+
     init() {
         BookPaths.migrateLayout()
         load()
@@ -354,6 +357,12 @@ final class BookLibrary {
     /// （sourceName），Local 里对不上号的就是新拖进来的。不用比文件数——
     /// 比数不可靠，删一个加一个数字还一样。
     func importLooseFiles() async -> Int {
+        // 两个触发点（视图首次出现、从后台切回前台）可能挨着来。不挡一下的话
+        // 两次扫描会看到同一批新文件，各自导一遍，同一本书出现两条。
+        guard !isScanning else { return 0 }
+        isScanning = true
+        defer { isScanning = false }
+
         let known = Set(books.map(\.sourceName).filter { !$0.isEmpty }.map { $0.lowercased() })
         let fresh = Self.scanLibrary().filter { !known.contains($0.lowercased()) }
         guard !fresh.isEmpty else { return 0 }
