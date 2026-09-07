@@ -229,7 +229,7 @@ struct VideoPage: View {
                     // 放不了的时候单击就是退出。提示页盖在上面、自己也接点击，
                     // 但它未必铺满每一个角落（横屏时安全区那圈），这里兜住。
                     enabled: !locked,
-                    onSingle: { failed ? onClose() : onSingleTap() },
+                    onSingle: { failed ? closeNow() : onSingleTap() },
                     onDouble: { point in handleDoubleTap(at: point, width: geo.size.width) },
                     onPan: { state, start, translation in
                         handlePan(state: state, start: start,
@@ -323,9 +323,9 @@ struct VideoPage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 整块都能点，不只是那几行字
         .contentShape(Rectangle())
-        .onTapGesture { onClose() }
+        .onTapGesture { closeNow() }
         .overlay(alignment: .topTrailing) {
-            Button(action: onClose) {
+            Button(action: closeNow) {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
@@ -380,7 +380,7 @@ struct VideoPage: View {
             decoderButton
             speedMenu
 
-            Button(action: onClose) {
+            Button(action: closeNow) {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .bold))
                     .frame(width: 38, height: 38)
@@ -757,6 +757,20 @@ struct VideoPage: View {
             // 所以这儿不用收拾自己的状态。
             onNext()
         }
+    }
+
+    /// 退出播放。先把声音掐掉，再走。
+    ///
+    /// dismiss 是带动画的，而拆播放器在 .onDisappear 里——那要等动画整个走完
+    /// 才来。中间那半秒到一秒播放器还在响，人已经点了退出还听着声音，
+    /// 就是「按钮迟钝」的由来。
+    ///
+    /// 这里只暂停不拆：画面留着跟动画一起滑走，比当场变黑好看。真正的收尾
+    /// 还是 onDisappear 里那次 stop，进度也在那儿交出去。
+    private func closeNow() {
+        player?.pause()
+        isPlaying = false
+        onClose()
     }
 
     private func stop() {
