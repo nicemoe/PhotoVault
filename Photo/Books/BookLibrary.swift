@@ -419,6 +419,29 @@ final class BookLibrary {
         return saved
     }
 
+    /// 原文件在 Local 里被删掉了，书也跟着走。
+    ///
+    /// Local 是源，章节是从它生成的：源没了，那堆章节文件就是一摞没人认领的
+    /// 碎片，书架上那本也打不开。
+    ///
+    /// sourceName 是空串的跳过：那种书压根没记原文件是哪个，
+    /// 无从判断源还在不在，不能拿「找不到」当「被删了」。
+    @discardableResult
+    func pruneMissingSources() -> Int {
+        let onDisk = Set(Self.scanLibrary().map { $0.lowercased() })
+        let doomed = books.filter { !$0.sourceName.isEmpty
+            && !onDisk.contains($0.sourceName.lowercased()) }
+        guard !doomed.isEmpty else { return 0 }
+
+        for book in doomed where !book.dirName.isEmpty {
+            try? FileManager.default.removeItem(at: BookPaths.directory(named: book.dirName))
+        }
+        let doomedIDs = Set(doomed.map(\.id))
+        books.removeAll { doomedIDs.contains($0.id) }
+        saveNow()
+        return doomed.count
+    }
+
     /// Local 里所有能收的文件，返回相对 Local 的路径。
     /// 子目录也翻——拖一整个文件夹进来是常事，而且保留人家的分类。
     nonisolated private static func scanLibrary() -> [String] {
