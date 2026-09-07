@@ -10,10 +10,13 @@ enum AssetKind: String, Codable, Hashable {
 
 struct Asset: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
-    /// 存放在 Documents/Media/ 下的文件名
+    /// 相对 Documents/Media/ 的路径，形如「2025 京都/大阪/IMG_0001.jpg」。
+    ///
+    /// 早先这里存的是一个 UUID 文件名、全部平铺在 Media 下。开了文件共享
+    /// 之后从访达看到的就是一堆 UUID，导出来没法用，所以改成照库里的层级摆。
     var fileName: String
     /// 导入时的原始文件名（不含扩展名）。
-    /// 磁盘上存的是 UUID 文件名，没有它就没有任何可显示的标题。
+    /// 界面上显示的标题用它——磁盘上那份名字可能因为重名被加了序号。
     /// 从系统相册选的照片拿不到文件名，这里会是空的。
     var originalName: String = ""
     var kind: AssetKind = .image
@@ -82,14 +85,21 @@ struct Folder: Identifiable, Codable, Hashable {
     /// 字段表达。做成嵌套数组的话，改名、加图这类操作每次都得先递归定位到
     /// 那一层，删父目录时也容易漏掉子树。
     var parentID: UUID?
+    /// 这个目录在磁盘上叫什么。
+    ///
+    /// 不直接拿 name 当目录名：name 可以随便重复、可以带 / : * 这些文件系统
+    /// 不认的字符。这里存一份洗过、且在同级里不重名的，改名时一起更新并把
+    /// 磁盘上的目录搬过去。空串表示还没分配（旧数据），加载时补。
+    var dirName: String = ""
     var createdAt: Date = Date()
     var assets: [Asset] = []
 
     init(id: UUID = UUID(), name: String, parentID: UUID? = nil,
-         createdAt: Date = Date(), assets: [Asset] = []) {
+         dirName: String = "", createdAt: Date = Date(), assets: [Asset] = []) {
         self.id = id
         self.name = name
         self.parentID = parentID
+        self.dirName = dirName
         self.createdAt = createdAt
         self.assets = assets
     }
@@ -105,6 +115,7 @@ struct Folder: Identifiable, Codable, Hashable {
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "未命名"
         parentID = try c.decodeIfPresent(UUID.self, forKey: .parentID)
+        dirName = try c.decodeIfPresent(String.self, forKey: .dirName) ?? ""
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         assets = try c.decodeIfPresent([Asset].self, forKey: .assets) ?? []
     }
@@ -119,8 +130,34 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String
     var colorIndex: Int = 0
+    /// 这个分组在 Media 下叫什么。理由同 Folder.dirName。
+    var dirName: String = ""
     var createdAt: Date = Date()
     var folders: [Folder] = []
+
+    init(id: UUID = UUID(), name: String, colorIndex: Int = 0, dirName: String = "",
+         createdAt: Date = Date(), folders: [Folder] = []) {
+        self.id = id
+        self.name = name
+        self.colorIndex = colorIndex
+        self.dirName = dirName
+        self.createdAt = createdAt
+        self.folders = folders
+    }
+
+    /// 加了 dirName 就必须手写解码。
+    ///
+    /// Swift 合成的 Decodable 不拿属性默认值兜底——键不在就直接抛错，
+    /// 旧的 library.json 里没有 dirName，会连整个库都解不出来。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "未命名"
+        colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
+        dirName = try c.decodeIfPresent(String.self, forKey: .dirName) ?? ""
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        folders = try c.decodeIfPresent([Folder].self, forKey: .folders) ?? []
+    }
 
     /// 含所有层级
     var folderCount: Int { folders.count }
