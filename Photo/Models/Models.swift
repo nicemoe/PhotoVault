@@ -189,9 +189,16 @@ struct PhotoGroup: Identifiable, Codable, Hashable {
     var imageCount: Int { folders.reduce(0) { $0 + $1.assets.lazy.filter { !$0.isVideo }.count } }
     var videoCount: Int { folders.reduce(0) { $0 + $1.assets.lazy.filter(\.isVideo).count } }
 
-    /// 跨目录取最近的 4 张做封面拼贴
+    /// 封面候选留几个。
+    ///
+    /// 拼贴只用四张，这里多备几个是为了顶替：有的文件是坏的，抽不出封面，
+    /// 拿它当一格就是一块空白。多备几个，坏的直接跳过、往下再取一个，
+    /// 整张封面不至于因为一个坏文件就废掉。
+    static let coverCandidates = 8
+
+    /// 跨目录取最近的几张做封面拼贴。取前四张能用的，见 ThumbnailCache.collage
     var coverAssets: [Asset] {
-        Self.newest(4, in: folders.lazy.flatMap(\.assets))
+        Self.newest(Self.coverCandidates, in: folders.lazy.flatMap(\.assets))
     }
 
     /// 取最近的 n 个，不把整个集合排一遍。
@@ -254,10 +261,10 @@ extension PhotoGroup {
         return Array(all.prefix(4))
     }
 
-    /// 一个目录的汇总：含子目录在内的照片数、子目录数、封面。
+    /// 一个目录的汇总：含子目录在内的照片数、子目录数、封面候选。
     ///
-    /// covers 留四个而不是一个：分组卡片的四宫格还要用。目录卡片只取第一张，
-    /// 多留三个的成本就是几个结构体，比为两处各走一遍子树便宜。
+    /// covers 备的是候选不是定稿：拼贴只用四张，多留几个用来顶替抽不出
+    /// 封面的坏文件。多留的成本就是几个结构体。
     struct FolderSummary {
         var photos = 0
         var subfolders = 0
@@ -310,12 +317,14 @@ extension PhotoGroup {
                 guard let folder = byID[top.id] else { continue }
                 var summary = FolderSummary(photos: folder.assets.count,
                                             subfolders: 0,
-                                            covers: Self.newest(4, in: folder.assets))
+                                            covers: Self.newest(Self.coverCandidates,
+                                                                in: folder.assets))
                 for child in children[top.id] ?? [] {
                     guard let sub = out[child] else { continue }
                     summary.photos += sub.photos
                     summary.subfolders += sub.subfolders + 1
-                    summary.covers = Self.newest(4, in: summary.covers + sub.covers)
+                    summary.covers = Self.newest(Self.coverCandidates,
+                                                 in: summary.covers + sub.covers)
                 }
                 out[top.id] = summary
             }

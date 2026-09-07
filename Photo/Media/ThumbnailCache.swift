@@ -270,39 +270,52 @@ final class ThumbnailCache: @unchecked Sendable {
     /// 缓存键带上这几张图的 id：目录里进了新东西、封面换人了，键就变了，
     /// 自然会重拼一张。
     func collage(of assets: [Asset], side: CGFloat, gap: CGFloat, scale: CGFloat) async -> UIImage? {
-        let picked = Array(assets.prefix(4))
-        guard !picked.isEmpty, side > 1 else { return nil }
+        guard !assets.isEmpty, side > 1 else { return nil }
 
-        let key = "collage@\(Int(side)):" + picked.map(\.id.uuidString).joined(separator: ",")
+        // 键按候选算，不按最后用上的那几张。这样某个坏文件今天抽不出、
+        // 明天换好了能抽出来，键是同一个——真要它重拼，靠的是候选变了
+        // （目录里进了新东西），那才是封面该换的时候。
+        let key = "collage@\(Int(side)):" + assets.map(\.id.uuidString).joined(separator: ",")
         if let hit = cache.object(forKey: key as NSString) { return hit }
 
-        // 每一格还是走原来那条路：内存缓存、限流、该抽帧就抽帧，全在里面。
-        // 四张都齐了才拼——缺一张就先不画，等下一次。整张卡片一起出现，
-        // 比一格一格往外冒好看。
         // 每格实际占多大就要多大。四宫格一格只占一半，按整张卡的分辨率去解
         // 就是四倍的像素白解。
-        let tilePixels = Int((picked.count > 1 ? side / 2 : side) * scale)
+        let tilePixels = Int((assets.count > 1 ? side / 2 : side) * scale)
 
+        // 凑四张能用的。
+        //
+        // 有的文件是坏的——视频抽不出帧、图片解不开。原来碰上一个就整张
+        // 不画了，于是一个坏文件能让整个目录显示成空白封面。现在跳过它，
+        // 接着往下取，候选是多备了的（PhotoGroup.coverCandidates）。
         var tiles: [UIImage] = []
-        for asset in picked {
+        for asset in assets {
             guard !Task.isCancelled else { return nil }
-            guard let tile = await thumbnail(for: asset, maxPixel: tilePixels) else { break }
-            tiles.append(tile)
+            if let tile = await thumbnail(for: asset, maxPixel: tilePixels) { tiles.append(tile) }
+            if tiles.count == 4 { break }
         }
-        guard tiles.count == picked.count else { return nil }
+        guard !tiles.isEmpty else { return nil }
+
+        // 只凑出一张的话，那一张要独占整个封面，得按整张卡的分辨率重取，
+        // 不然半格大小的图拉满一张卡是糊的
+        if tiles.count == 1, assets.count > 1,
+           let asset = assets.first(where: { cached($0, maxPixel: tilePixels) != nil }),
+           let full = await thumbnail(for: asset, maxPixel: Int(side * scale)) {
+            tiles = [full]
+        }
 
         let made = Self.compose(tiles, side: side, gap: gap, scale: scale)
         let cost = Int(side * side * scale * scale * 4)
         cache.setObject(made, forKey: key as NSString, cost: cost)
 
-        // 登记到参与的每一张名下。
+        // 登记到候选的每一张名下。
         //
-        // 删掉封面里的某个视频之后，界面本来就会自己纠正——封面换人了，
+        // 删掉封面里的某个文件之后，界面本来就会自己纠正——候选换人了，
         // 键跟着变，重拼一张。但旧那张位图是拿不到也删不掉的死数据，
-        // 只能等缓存自己淘汰。登记之后，删这个视频时 invalidate 会顺手
-        // 把它带走。一张拼贴挂在四个 id 下面，谁没了都算数。
+        // 只能等缓存自己淘汰。登记之后，删这个文件时 invalidate 会顺手
+        // 把它带走。挂在所有候选名下，谁没了都算数——包括那些没被用上的，
+        // 它们本来就是「万一前面的坏了顶上来」的备选。
         lock.lock()
-        for asset in picked { keysByAsset[asset.id, default: []].insert(key) }
+        for asset in assets { keysByAsset[asset.id, default: []].insert(key) }
         lock.unlock()
         return made
     }

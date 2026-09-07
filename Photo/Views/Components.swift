@@ -199,9 +199,10 @@ struct CoverCollage: View {
             }
     }
 
-    /// 换了图、换了尺寸都要重拼
+    /// 换了图、换了尺寸都要重拼。
+    /// 按全部候选算，不是只按用上的那四张——第五张也可能顶上来。
     private var cacheKey: String {
-        assets.prefix(4).map(\.id.uuidString).joined(separator: ",") + "@\(Int(side))"
+        assets.map(\.id.uuidString).joined(separator: ",") + "@\(Int(side))"
     }
 }
 
