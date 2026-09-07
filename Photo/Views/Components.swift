@@ -78,7 +78,25 @@ struct AssetImage: View {
     var contentMode: ContentMode = .fill
 
     @State private var image: UIImage?
-    @State private var loaded = false
+    @State private var loaded: Bool
+
+    /// 建视图的时候就先问一次内存缓存。
+    ///
+    /// 原来一律等 .task 起来了才问：哪怕图早就在缓存里，也要先画一遍灰底、
+    /// 排一个任务、下一拍再把图塞进去重画一遍——每张图两次渲染加一次任务
+    /// 调度。目录网格一格四张图，往下滑每冒出一行就要付八次，
+    /// 「渲染出来很多小图」的时候那一顿就是这么来的。
+    ///
+    /// 命中缓存的话第一帧就带着图，任务里直接返回，一次渲染搞定。
+    /// 这个查询是一次 NSCache 取值，比它省下的那次渲染便宜得多。
+    init(asset: Asset, maxPixel: Int = 480, contentMode: ContentMode = .fill) {
+        self.asset = asset
+        self.maxPixel = maxPixel
+        self.contentMode = contentMode
+        let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel)
+        _image = State(initialValue: hit)
+        _loaded = State(initialValue: hit != nil)
+    }
 
     var body: some View {
         // 用 overlay 而不是 ZStack：填充模式下图片会溢出，
@@ -100,9 +118,17 @@ struct AssetImage: View {
             .clipped()
             .task(id: asset.id) {
                 if let hit = ThumbnailCache.shared.cached(asset, maxPixel: maxPixel) {
-                    image = hit
-                    loaded = true
+                    // 多半在 init 里就已经放进来了。同一张就别再赋一次值——
+                    // @State 不比较新旧，赋了就是一次白刷新。
+                    if image !== hit { image = hit }
+                    if !loaded { loaded = true }
                     return
+                }
+                // 走到这儿说明缓存里没有。手上还留着图的话，是这个格子被换给了
+                // 另一张（.task 的 id 变了），旧的那张不作数了。
+                if image != nil {
+                    image = nil
+                    loaded = false
                 }
                 let made = await ThumbnailCache.shared.thumbnail(for: asset, maxPixel: maxPixel)
                 guard !Task.isCancelled else { return }
@@ -158,21 +184,21 @@ struct CoverCollage: View {
                     AssetImage(asset: assets[0], maxPixel: maxPixel)
                         .frame(maxWidth: .infinity)
                     VStack(spacing: gap) {
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(maxHeight: .infinity)
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(maxHeight: .infinity)
+                        AssetImage(asset: assets[1], maxPixel: 256).frame(maxHeight: .infinity)
+                        AssetImage(asset: assets[2], maxPixel: 256).frame(maxHeight: .infinity)
                     }
                     .frame(maxWidth: .infinity)
                 }
             default:
                 VStack(spacing: gap) {
                     HStack(spacing: gap) {
-                        AssetImage(asset: assets[0], maxPixel: 320).frame(maxWidth: .infinity)
-                        AssetImage(asset: assets[1], maxPixel: 320).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[0], maxPixel: 256).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[1], maxPixel: 256).frame(maxWidth: .infinity)
                     }
                     .frame(maxHeight: .infinity)
                     HStack(spacing: gap) {
-                        AssetImage(asset: assets[2], maxPixel: 320).frame(maxWidth: .infinity)
-                        AssetImage(asset: assets[3], maxPixel: 320).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[2], maxPixel: 256).frame(maxWidth: .infinity)
+                        AssetImage(asset: assets[3], maxPixel: 256).frame(maxWidth: .infinity)
                     }
                     .frame(maxHeight: .infinity)
                 }
@@ -192,7 +218,13 @@ struct GroupCard: View {
         VStack(alignment: .leading, spacing: 0) {
             CoverCollage(assets: group.coverAssets, tint: Theme.color(at: group.colorIndex))
                 .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
+                // 高度直接给死，不靠 aspectRatio 去谈。
+                //
+                // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
+                // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
+                // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
+                // side 本来就是按列宽算好的，用它就完了。
+                .frame(height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topLeading) {
                     // 卡片缩到三列之后这个角标要跟着收，不然占掉封面一大块
@@ -253,7 +285,13 @@ struct FolderCard: View {
         VStack(alignment: .leading, spacing: 0) {
             CoverCollage(assets: summary.covers, tint: tint, emptyIcon: "folder")
                 .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
+                // 高度直接给死，不靠 aspectRatio 去谈。
+                //
+                // 拼贴里全是 Color 打底的图片位，整棵子树没有固有尺寸，
+                // 这时候让 aspectRatio 把它摁成正方形，要多走一轮尺寸协商，
+                // 而 LazyVGrid 每滑出一行都要新建一批格子，每格都付一次。
+                // side 本来就是按列宽算好的，用它就完了。
+                .frame(height: side)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.cover, style: .continuous))
                 .overlay(alignment: .topTrailing) {
                     if subfolderCount > 0 {
