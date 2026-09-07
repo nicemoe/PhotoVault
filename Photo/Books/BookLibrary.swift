@@ -432,6 +432,10 @@ final class BookLibrary {
         var ok = 0
         var failures: [String] = []
         for url in urls {
+            // 「文件」选取器是 asCopy 拿的，系统先把文件拷进临时目录再给 URL，
+            // 那份拷贝的主人就是我们。导完（成了也好、报错也好）就该收掉——
+            // 一次选一千本小说不收，就是一千份副本堆在临时目录里等系统哪天来清。
+            defer { Self.discardTempCopy(url) }
             do {
                 try await importBook(from: url)
                 ok += 1
@@ -441,6 +445,16 @@ final class BookLibrary {
             }
         }
         return (ok, failures)
+    }
+
+    /// 收掉系统交给我们的那份临时拷贝。
+    ///
+    /// 只碰临时目录里的东西。扫书库那条路也走 importBook，但传进去的 URL
+    /// 指着 Books 里的正主——那是书本身，删了就没了。
+    nonisolated private static func discardTempCopy(_ url: URL) {
+        let tmp = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        guard url.standardizedFileURL.path.hasPrefix(tmp + "/") else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// 收书库里还没收过的书。
