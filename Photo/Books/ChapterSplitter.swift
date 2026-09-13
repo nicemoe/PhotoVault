@@ -27,7 +27,9 @@ enum ChapterSplitter {
     ///    我们自己编的号不再写进文件。
     /// 3：分出「真章节」和「硬切的片」——认不出章节的书，目录只给一条，
     ///    不再拿编号去充数。
-    static let version = 3
+    /// 4：清掉上一版塞进正文的编号行。3 里也写了这段清理，但正则少了 (?m)，
+    ///    一行都没清着，等于空转。
+    static let version = 4
 
     /// 常见中文章节标题：第一章 / 第1节 / 序章 / 楔子 / 番外 / Chapter 1。
     /// 限制标题长度是为了避免把正文里出现的「第一次」这类词误判成标题。
@@ -91,19 +93,25 @@ enum ChapterSplitter {
             .replacingOccurrences(of: "\r", with: "\n")
             .replacingOccurrences(of: "\u{FEFF}", with: "")
             .replacingOccurrences(of: "\u{200B}", with: "")
+        // 清掉上一版塞进文件的编号行。要赶在压空行之前，不然连着编号一起
+        // 删掉的那个空行会把前后两段并在一起。
+        //
+        // 那时候整本书按字数硬切，生成的「第 1 节」被当成标题写进了 txt，
+        // 而原文件导入后就删了——盘上那份是唯一一份，等于把人的书改脏了。
+        //
+        // 开头那个 (?m) 是必须的。replacingOccurrences 的 .regularExpression
+        // 走的是默认选项，^ 只认整个字符串的开头、$ 只认结尾——不写 (?m) 的话，
+        // 只有「整份文件就是一行第 1 节」才会被清掉，等于什么都没做。
+        //
+        // 认的是我们自己那个数字两边带空格的格式。小说里写章节是「第一节」
+        // 「第1节」，不会在数字两边留空格，所以不会误伤作者的标题。
+        s = s.replacingOccurrences(of: "(?m)^第 [0-9]+ [章节段]$\n*", with: "\n\n",
+                                   options: [.regularExpression])
+
         // 连着三个以上的换行一律压成两个，一次正则扫完。
         // 原来是 while contains("\n\n\n") 反复替换：每轮都要把整串扫一遍再
         // 复制一遍，碰上连着几十个空行的文件就得来回复制几十次。
         s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-
-        // 清掉上一版塞进文件的编号行。
-        //
-        // 那时候整本书按字数硬切，生成的「第 1 节」被当成标题写进了 txt，
-        // 而原文件导入后就删了——盘上那份是唯一一份，等于把人的书改脏了。
-        // 认的是我们自己那个带空格的格式：小说里写章节是「第一节」「第1节」，
-        // 不会在数字两边留空格，所以不会误伤作者的标题。
-        s = s.replacingOccurrences(of: "^第 [0-9]+ [章节]$\n?", with: "",
-                                   options: [.regularExpression])
 
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
