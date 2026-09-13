@@ -1,9 +1,19 @@
 import Foundation
 
-/// 切分出来的一章：标题 + 正文
+/// 切分出来的一章。
 struct ParsedChapter {
+    /// 目录里显示的标题
     var title: String
-    var body: String
+    /// 这一章的全文。
+    ///
+    /// 正文里本来就有标题行的（小说 txt 基本都有），第一行就是那行标题——
+    /// 从目录点进来，得能一眼看见自己在第几章，光有正文是认不出来的。
+    ///
+    /// 反过来，标题是我们自己编号编出来的（整本没有章节标记、只能按字数
+    /// 硬切的那种），就不往里塞。那是我们的记账，不是书的内容，写进去等于
+    /// 把人的文件改脏了——之前那一版正是这么干的，「第 1 节」「第 2 节」
+    /// 现在还留在那些 txt 里。
+    var text: String
 }
 
 /// TXT 章节切分。
@@ -12,8 +22,10 @@ enum ChapterSplitter {
     /// 分章规则的版本。规则改了就 +1，旧书会被重新拆一遍（见 BookLibrary）。
     ///
     /// 1：第一版真正能用的规则。在这之前整个正则编译不过（见下），所有书
-    ///    其实都是按字数硬切的，标题全是「第 N 节」，得整体重来一次。
-    static let version = 1
+    ///    其实都是按字数硬切的，标题全是「第 N 节」。
+    /// 2：标题行留在正文里，从目录点进来能看见自己在第几章；
+    ///    我们自己编的号不再写进文件。
+    static let version = 2
 
     /// 常见中文章节标题：第一章 / 第1节 / 序章 / 楔子 / 番外 / Chapter 1。
     /// 限制标题长度是为了避免把正文里出现的「第一次」这类词误判成标题。
@@ -64,6 +76,16 @@ enum ChapterSplitter {
         // 原来是 while contains("\n\n\n") 反复替换：每轮都要把整串扫一遍再
         // 复制一遍，碰上连着几十个空行的文件就得来回复制几十次。
         s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+
+        // 清掉上一版塞进文件的编号行。
+        //
+        // 那时候整本书按字数硬切，生成的「第 1 节」被当成标题写进了 txt，
+        // 而原文件导入后就删了——盘上那份是唯一一份，等于把人的书改脏了。
+        // 认的是我们自己那个带空格的格式：小说里写章节是「第一节」「第1节」，
+        // 不会在数字两边留空格，所以不会误伤作者的标题。
+        s = s.replacingOccurrences(of: "^第 [0-9]+ [章节]$\n?", with: "",
+                                   options: [.regularExpression])
+
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -93,18 +115,23 @@ enum ChapterSplitter {
             let intro = String(text[text.startIndex..<first.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if intro.count > 30 {
-                result.append(ParsedChapter(title: "开篇", body: intro))
+                result.append(ParsedChapter(title: "开篇", text: intro))
             }
         }
 
         for (i, heading) in headings.enumerated() {
-            let bodyStart = heading.upperBound
-            let bodyEnd = i + 1 < headings.count ? headings[i + 1].lowerBound : text.endIndex
-            guard bodyStart <= bodyEnd else { continue }
+            // 从标题那一行开始，不是从标题之后。
+            //
+            // 一章的第一行就该是它的标题——目录点进来，正文劈头就是内容的话，
+            // 人根本认不出这是不是自己要的那一章。
+            let start = heading.lowerBound
+            let end = i + 1 < headings.count ? headings[i + 1].lowerBound : text.endIndex
+            guard start <= end else { continue }
 
             let title = String(text[heading]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let body = String(text[bodyStart..<bodyEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-            result.append(ParsedChapter(title: title.isEmpty ? "第 \(i + 1) 章" : title, body: body))
+            let whole = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            result.append(ParsedChapter(title: title.isEmpty ? "第 \(i + 1) 章" : title,
+                                        text: whole))
         }
         return result
     }
@@ -113,7 +140,7 @@ enum ChapterSplitter {
 
     private static func chunk(_ text: String) -> [ParsedChapter] {
         guard text.count > fallbackChunkSize else {
-            return [ParsedChapter(title: "正文", body: text)]
+            return [ParsedChapter(title: "正文", text: text)]
         }
 
         var result: [ParsedChapter] = []
@@ -133,7 +160,9 @@ enum ChapterSplitter {
             }
             let body = String(text[cursor..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !body.isEmpty {
-                result.append(ParsedChapter(title: "第 \(index) 节", body: body))
+                // 编号只当目录里的标签，不写进正文——这本书本来就没有章节标题，
+                // 凭空塞一行进去就是在改人的文件
+                result.append(ParsedChapter(title: "第 \(index) 节", text: body))
                 index += 1
             }
             cursor = end

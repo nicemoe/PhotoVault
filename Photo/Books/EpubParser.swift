@@ -57,7 +57,9 @@ enum EpubParser {
             let title = HTMLText.firstHeading(from: html)
                 ?? firstLineAsTitle(text)
                 ?? "第 \(chapters.count + 1) 章"
-            chapters.append(ParsedChapter(title: title, body: text))
+            // text 是整页 HTML 抽出来的纯文本，标题那个 <h1> 也在里面，
+            // 所以第一行本来就是标题，不用另外拼
+            chapters.append(ParsedChapter(title: title, text: text))
         }
 
         guard !chapters.isEmpty else { throw EpubError.emptySpine }

@@ -87,18 +87,19 @@ private struct PageItem {
     /// 本页在本章正文里的字符范围
     let range: NSRange
     let body: PageLayout
-    /// 本章第一页才画标题
-    let title: PageLayout?
+    /// 本章第一页在上方多留一截，让章首有点喘息
+    let isChapterStart: Bool
 
-    /// 标题上方留白、标题与正文的间距、页与页之间的间距
-    static let titlePad: CGFloat = 40
-    static let titleGap: CGFloat = 20
+    /// 章首上方的留白、页与页之间的间距
+    static let titlePad: CGFloat = 28
     static let pageGap: CGFloat = 2
 
-    var bodyTop: CGFloat {
-        guard let title else { return 0 }
-        return Self.titlePad + title.totalHeight + Self.titleGap
-    }
+    /// 章节标题不再单独画一层。
+    ///
+    /// 标题现在是正文的第一行（见 ParsedChapter.text）——从目录点进来要能
+    /// 看见自己在第几章，翻页模式那边也只能靠正文里的这一行。既然正文里
+    /// 已经有了，这儿再画一遍就是重了。
+    var bodyTop: CGFloat { isChapterStart ? Self.titlePad : 0 }
 
     var height: CGFloat { bodyTop + body.totalHeight + Self.pageGap }
 }
@@ -126,8 +127,6 @@ private final class PageCell: UICollectionViewCell {
         ctx.textMatrix = .identity
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
-        item.title?.draw(in: ctx, originY: PageItem.titlePad,
-                         canvasHeight: bounds.height, x: textX)
         item.body.draw(in: ctx, originY: item.bodyTop,
                        canvasHeight: bounds.height, x: textX)
     }
@@ -229,24 +228,11 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
 
     private var textX: CGFloat { max(0, (bounds.width - textWidth) / 2) }
 
-    /// 标题用同一套排版，只是大一号
-    private var titleSettings: ReaderSettings {
-        var s = settings
-        s.fontSize += 3
-        return s
-    }
-
     private func makeItems(chapter: Int) -> [PageItem] {
         guard let source, chapter >= 0, chapter < chapterTitles.count else { return [] }
         let full = source.attributed(chapter)
         let ranges = source.pages(chapter)
         let width = textWidth
-
-        let title = PageLayout(
-            attributed: ReaderTypesetter.attributedText(chapterTitles[chapter],
-                                                        settings: titleSettings,
-                                                        color: textColor),
-            width: width)
 
         return ranges.enumerated().compactMap { index, range in
             guard range.location + range.length <= full.length else { return nil }
@@ -255,7 +241,7 @@ final class ChapterScrollContainer: UIView, UICollectionViewDataSource,
                             range: range,
                             body: PageLayout(attributed: full.attributedSubstring(from: range),
                                              width: width),
-                            title: index == 0 ? title : nil)
+                            isChapterStart: index == 0)
         }
     }
 

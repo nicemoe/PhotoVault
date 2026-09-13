@@ -731,15 +731,20 @@ final class BookLibrary {
         let gap = Data("\n\n".utf8)
 
         for (i, chapter) in chapters.enumerated() {
-            blob.append(Data(chapter.title.utf8))
-            blob.append(gap)
-            let body = Data(chapter.body.utf8)
+            // 一章就写它的全文，偏移圈的也是全文。
+            //
+            // 原来是「标题 + 空行 + 正文」分开写，偏移只圈正文——于是读一章
+            // 读不到标题，从目录点进去劈头就是内容，认不出是哪一章。而且那个
+            // 标题是照 ParsedChapter.title 写的，硬切出来的「第 N 节」也会被
+            // 写进去，把人的文件改脏。现在标题本来就是正文的第一行（见
+            // ParsedChapter.text），照写就行。
+            let body = Data(chapter.text.utf8)
             metas.append(ChapterMeta(index: i, title: chapter.title,
-                                     characterCount: chapter.body.count,
+                                     characterCount: chapter.text.count,
                                      byteOffset: blob.count, byteLength: body.count))
             blob.append(body)
             blob.append(gap)
-            characters += chapter.body.count
+            characters += chapter.text.count
         }
 
         // 落点。源文件本来就叫这个名字（书库里的 UTF-8 txt）的话，
