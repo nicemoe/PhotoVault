@@ -375,7 +375,7 @@ struct BookCard: View {
             .frame(width: side, height: side * 1.35)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(book.author.isEmpty ? "\(book.chapterCount) 章" : book.author)
+                Text(book.author.isEmpty ? book.sizeText : book.author)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.label)
                     .lineLimit(1)
@@ -416,7 +416,7 @@ struct BookRow: View {
                     .foregroundStyle(Theme.label)
                     .lineLimit(1)
 
-                Text(book.author.isEmpty ? "\(book.chapterCount) 章" : "\(book.author) · \(book.chapterCount) 章")
+                Text(book.author.isEmpty ? book.sizeText : "\(book.author) · \(book.sizeText)")
                     .font(.system(size: 12.5))
                     .foregroundStyle(Theme.secondaryLabel)
                     .lineLimit(1)

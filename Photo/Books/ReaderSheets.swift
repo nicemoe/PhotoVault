@@ -19,7 +19,16 @@ struct ChapterListSheet: View {
     /// 目录和书签放同一个面板，用分段切换，不额外占工具栏位置
     @State private var tab = 0
 
+    /// 目录里摆什么。
+    ///
+    /// 认不出章节的书（整本没有「第 X 章」这类标记）只给一条。
+    ///
+    /// 那种书现在是按字数切成片的，但那是**内部分片**——为了不把几十万字
+    /// 一次排版、一次读进内存。目录是给人看的索引，只该有作者真正写下的
+    /// 章节。把分片摆进目录，就是拿「第 1 段」这种我们自己编的号去充数，
+    /// 人还以为书本来就长这样。
     private var visibleChapters: [ChapterMeta] {
+        guard book.hasRealChapters else { return Array(chapters.prefix(1)) }
         let base = keyword.isEmpty
             ? chapters
             : chapters.filter { $0.title.localizedCaseInsensitiveContains(keyword) }
@@ -40,7 +49,10 @@ struct ChapterListSheet: View {
                 if tab == 0 { chapterList } else { bookmarkList }
             }
             .background(Theme.background)
-            .navigationTitle(tab == 0 ? "共 \(book.chapterCount) 章" : "书签")
+            // 认不出章节的书别报章数——那个数是内部分了几片，不是书有几章
+            .navigationTitle(tab == 0
+                             ? (book.hasRealChapters ? "共 \(book.chapterCount) 章" : "目录")
+                             : "书签")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -102,12 +114,12 @@ struct ChapterListSheet: View {
                             dismiss()
                         } label: {
                             HStack(spacing: 10) {
-                                Text(chapter.title)
+                                Text(book.hasRealChapters ? chapter.title : "正文")
                                     .font(.system(size: 15, weight: chapter.index == current ? .semibold : .regular))
                                     .foregroundStyle(chapter.index == current ? Theme.accent : Theme.label)
                                     .lineLimit(1)
                                 Spacer()
-                                Text("\(chapter.characterCount) 字")
+                                Text("\(book.hasRealChapters ? chapter.characterCount : book.totalCharacters) 字")
                                     .font(.system(size: 12))
                                     .foregroundStyle(Theme.tertiaryLabel)
                             }

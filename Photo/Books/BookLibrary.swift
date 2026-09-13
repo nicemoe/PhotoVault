@@ -347,19 +347,21 @@ final class BookLibrary {
         let data = try Data(contentsOf: url)
 
         // 解析放后台，长篇 TXT 的正则切分很吃 CPU
-        let parsed: (title: String, author: String, chapters: [ParsedChapter])
+        let parsed: (title: String, author: String,
+                     chapters: [ParsedChapter], fromHeadings: Bool)
         switch ext {
         case "txt":
             parsed = try await Task.detached(priority: .userInitiated) {
                 guard let text = TextDecoding.decode(data) else { throw ImportError.decodeFailed }
-                let chapters = ChapterSplitter.split(text)
-                guard !chapters.isEmpty else { throw ImportError.empty }
-                return (fallbackTitle, "", chapters)
+                let split = ChapterSplitter.split(text)
+                guard !split.chapters.isEmpty else { throw ImportError.empty }
+                return (fallbackTitle, "", split.chapters, split.fromHeadings)
             }.value
         case "epub":
             parsed = try await Task.detached(priority: .userInitiated) {
                 let result = try EpubParser.parse(data, fallbackTitle: fallbackTitle)
-                return (result.title, result.author, result.chapters)
+                // epub 的章节是照目录文件分的，那本来就是作者划的章
+                return (result.title, result.author, result.chapters, true)
             }.value
         default:
             throw ImportError.unsupported(ext)
@@ -395,6 +397,7 @@ final class BookLibrary {
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
                         chapterCount: built.metas.count,
+                        hasRealChapters: parsed.fromHeadings,
                         splitVersion: ChapterSplitter.version,
                         totalCharacters: built.characters,
                         colorIndex: abs(parsed.title.hashValue) % Theme.paletteHex.count)
@@ -558,24 +561,25 @@ final class BookLibrary {
         let bookID = book.id
 
         let built = await Task.detached(priority: .userInitiated) {
-            () -> (metas: [ChapterMeta], characters: Int, bytes: Int, name: String)? in
+            () -> ((metas: [ChapterMeta], characters: Int, bytes: Int, name: String), Bool)? in
             let url = BookPaths.file(named: name)
             guard let data = try? Data(contentsOf: url),
                   let text = TextDecoding.decode(data) else { return nil }
-            let chapters = ChapterSplitter.split(text)
-            guard !chapters.isEmpty else { return nil }
-            guard let made = Self.writeText(chapters: chapters,
+            let split = ChapterSplitter.split(text)
+            guard !split.chapters.isEmpty else { return nil }
+            guard let made = Self.writeText(chapters: split.chapters,
                                             stem: (name as NSString).deletingPathExtension,
                                             replacing: url) else { return nil }
             Self.writeChapters(made.metas, for: bookID)
-            return made
+            return (made, split.fromHeadings)
         }.value
-        guard let built else { return nil }
+        guard let (built, fromHeadings) = built else { return nil }
 
         if let i = books.firstIndex(where: { $0.id == bookID }) {
             books[i].sourceName = built.name
             books[i].textBytes = built.bytes
             books[i].chapterCount = built.metas.count
+            books[i].hasRealChapters = fromHeadings
             books[i].splitVersion = ChapterSplitter.version
             books[i].totalCharacters = built.characters
             saveNow()

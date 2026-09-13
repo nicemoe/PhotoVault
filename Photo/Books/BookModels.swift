@@ -128,6 +128,11 @@ struct Book: Identifiable, Codable, Hashable {
     var addedAt: Date = Date()
     /// 共多少章。章节表本身按书单独存，这里只留书架和目录标题要显示的那个数。
     var chapterCount: Int = 0
+    /// 正文里认出真章节了吗。
+    ///
+    /// false 表示整本没有「第 X 章」这类标记，现在这些片是按字数切的——
+    /// 那是内部分片，不是目录。目录该只给一条，不能拿编号去充数。
+    var hasRealChapters: Bool = true
     /// 这本书是按哪一版分章规则拆的。
     ///
     /// 规则改进了，已经收进来的书不会自己变好——章节表是导入那一刻算出来
@@ -143,7 +148,8 @@ struct Book: Identifiable, Codable, Hashable {
     init(id: UUID = UUID(), title: String,
          sourceName: String = "", textBytes: Int = 0,
          author: String = "", format: BookFormat,
-         addedAt: Date = Date(), chapterCount: Int = 0, splitVersion: Int = 0,
+         addedAt: Date = Date(), chapterCount: Int = 0,
+         hasRealChapters: Bool = true, splitVersion: Int = 0,
          totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
@@ -155,6 +161,7 @@ struct Book: Identifiable, Codable, Hashable {
         self.format = format
         self.addedAt = addedAt
         self.chapterCount = chapterCount
+        self.hasRealChapters = hasRealChapters
         self.splitVersion = splitVersion
         self.totalCharacters = totalCharacters
         self.progress = progress
@@ -175,11 +182,25 @@ struct Book: Identifiable, Codable, Hashable {
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
         chapterCount = try c.decodeIfPresent(Int.self, forKey: .chapterCount) ?? 0
+        hasRealChapters = try c.decodeIfPresent(Bool.self, forKey: .hasRealChapters) ?? true
         splitVersion = try c.decodeIfPresent(Int.self, forKey: .splitVersion) ?? 0
         totalCharacters = try c.decodeIfPresent(Int.self, forKey: .totalCharacters) ?? 0
         progress = try c.decodeIfPresent(ReadingProgress.self, forKey: .progress) ?? ReadingProgress()
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
+    }
+
+    /// 书架上那行副标题里的「有多大」。
+    ///
+    /// 认出章节的报章数，认不出的报字数——那种书现在是按字数切成片的，
+    /// 报「128 章」等于把内部分片说成了书的章节。
+    var sizeText: String {
+        guard hasRealChapters else {
+            return totalCharacters >= 10_000
+                ? String(format: "%.1f 万字", Double(totalCharacters) / 10_000)
+                : "\(totalCharacters) 字"
+        }
+        return "\(chapterCount) 章"
     }
 
     /// 0...1

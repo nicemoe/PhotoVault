@@ -440,7 +440,13 @@ struct ReaderView: View {
 
     // MARK: 数据
 
+    /// 顶栏和书签上显示的「现在在哪一章」。
+    ///
+    /// 认不出章节的书不报片号。那些「第 N 段」是内部分片的编号，
+    /// 不是书里的东西——摆出来只会让人以为作者真这么分的。那种书就报书名。
     private var currentChapterTitle: String {
+        guard let book else { return "" }
+        guard book.hasRealChapters else { return book.title }
         guard chapters.indices.contains(locator.chapter) else { return "" }
         return chapters[locator.chapter].title
     }

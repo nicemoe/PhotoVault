@@ -25,7 +25,9 @@ enum ChapterSplitter {
     ///    其实都是按字数硬切的，标题全是「第 N 节」。
     /// 2：标题行留在正文里，从目录点进来能看见自己在第几章；
     ///    我们自己编的号不再写进文件。
-    static let version = 2
+    /// 3：分出「真章节」和「硬切的片」——认不出章节的书，目录只给一条，
+    ///    不再拿编号去充数。
+    static let version = 3
 
     /// 常见中文章节标题：第一章 / 第1节 / 序章 / 楔子 / 番外 / Chapter 1。
     /// 限制标题长度是为了避免把正文里出现的「第一次」这类词误判成标题。
@@ -52,15 +54,32 @@ enum ChapterSplitter {
     private static let fallbackChunkSize = 4000
     private static let minChapterCount = 2
 
-    static func split(_ text: String) -> [ParsedChapter] {
+    /// 切分的结果。
+    ///
+    /// 目录和分片是两回事，这里必须分清楚：
+    ///
+    /// - **分片**是为了不把几十万字一次排版、一次读进内存，纯属内部的事，
+    ///   认不出章节时按字数切也无妨。
+    /// - **目录**是给人看的索引，只该有作者真正写下的那些章节。
+    ///
+    /// 把两者混成一个列表，就会拿「第 1 节」这种我们自己编的号去充数，
+    /// 目录里一排假章节，人还以为书就长这样。fromHeadings 记的就是这个差别。
+    struct Split {
+        var chapters: [ParsedChapter]
+        /// true = 这些是从正文里认出来的真章节；false = 认不出，按字数切的片
+        var fromHeadings: Bool
+    }
+
+    static func split(_ text: String) -> Split {
         let normalized = normalize(text)
-        guard !normalized.isEmpty else { return [] }
+        guard !normalized.isEmpty else { return Split(chapters: [], fromHeadings: false) }
 
         let matches = headingRanges(in: normalized)
         if matches.count >= minChapterCount {
-            return chapters(from: normalized, headings: matches)
+            return Split(chapters: chapters(from: normalized, headings: matches),
+                         fromHeadings: true)
         }
-        return chunk(normalized)
+        return Split(chapters: chunk(normalized), fromHeadings: false)
     }
 
     // MARK: 归一化
@@ -160,9 +179,10 @@ enum ChapterSplitter {
             }
             let body = String(text[cursor..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !body.isEmpty {
-                // 编号只当目录里的标签，不写进正文——这本书本来就没有章节标题，
-                // 凭空塞一行进去就是在改人的文件
-                result.append(ParsedChapter(title: "第 \(index) 节", text: body))
+                // 编号只是个内部标签，既不写进正文，也不会出现在目录里
+                // （见 Split.fromHeadings）。凭空塞进人的文件、或者摆进目录
+                // 冒充章节，都是把「我们怎么分片」当成了「书是怎么写的」。
+                result.append(ParsedChapter(title: "第 \(index) 段", text: body))
                 index += 1
             }
             cursor = end
