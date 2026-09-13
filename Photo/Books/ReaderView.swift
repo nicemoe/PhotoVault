@@ -269,7 +269,16 @@ struct ReaderView: View {
             Text(currentChapterTitle)
                 .lineLimit(1)
             Spacer()
-            if settings.mode == .scroll {
+            // 右边这个数报的是「本章读到哪儿」——认得出章节的书才说得通。
+            //
+            // 认不出章节的那种，「本章」其实是我们按字数切的片，于是
+            // 「3/12」说的是「这一片的第 3 页，共 12 页」。片是内部的东西，
+            // 那个分母对人没有意义，摆出来还像是书真的分了这么多节。
+            // 那种书报全书读到哪儿，那才是人想知道的。
+            if let book, !book.hasRealChapters {
+                Text("\(Int((book.progressRatio * 100).rounded()))%")
+                    .monospacedDigit()
+            } else if settings.mode == .scroll {
                 Text("\(chapterPercent)%")
                     .monospacedDigit()
             } else if let source = pageSource {
