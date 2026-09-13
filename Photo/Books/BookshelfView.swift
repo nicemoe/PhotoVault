@@ -235,7 +235,7 @@ struct BookshelfView: View {
 
         let parts = [saved > 0 ? "收进 \(saved) 本" : nil,
                      gone > 0 ? "移除 \(gone) 本" : nil,
-                     redone > 0 ? "重拆 \(redone) 本" : nil].compactMap { $0 }
+                     redone > 0 ? "重新分章 \(redone) 本" : nil].compactMap { $0 }
         toastItem = Toast(icon: "arrow.triangle.2.circlepath",
                           text: parts.joined(separator: "，"))
     }

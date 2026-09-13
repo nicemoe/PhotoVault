@@ -128,6 +128,12 @@ struct Book: Identifiable, Codable, Hashable {
     var addedAt: Date = Date()
     /// 共多少章。章节表本身按书单独存，这里只留书架和目录标题要显示的那个数。
     var chapterCount: Int = 0
+    /// 这本书是按哪一版分章规则拆的。
+    ///
+    /// 规则改进了，已经收进来的书不会自己变好——章节表是导入那一刻算出来
+    /// 存下的。记一个版本号，对账时发现落后了就照新规则重拆一遍。
+    /// 0 是「规则还没能用的那个年代」，那时候所有书都是按字数硬切的。
+    var splitVersion: Int = 0
     var totalCharacters: Int = 0
     var progress = ReadingProgress()
     /// 封面色，按书名哈希取，避免每本书都长一样
@@ -137,7 +143,8 @@ struct Book: Identifiable, Codable, Hashable {
     init(id: UUID = UUID(), title: String,
          sourceName: String = "", textBytes: Int = 0,
          author: String = "", format: BookFormat,
-         addedAt: Date = Date(), chapterCount: Int = 0, totalCharacters: Int = 0,
+         addedAt: Date = Date(), chapterCount: Int = 0, splitVersion: Int = 0,
+         totalCharacters: Int = 0,
          progress: ReadingProgress = ReadingProgress(), colorIndex: Int = 0,
          bookmarks: [Bookmark] = []) {
         self.id = id
@@ -148,6 +155,7 @@ struct Book: Identifiable, Codable, Hashable {
         self.format = format
         self.addedAt = addedAt
         self.chapterCount = chapterCount
+        self.splitVersion = splitVersion
         self.totalCharacters = totalCharacters
         self.progress = progress
         self.colorIndex = colorIndex
@@ -167,6 +175,7 @@ struct Book: Identifiable, Codable, Hashable {
         format = try c.decodeIfPresent(BookFormat.self, forKey: .format) ?? .txt
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
         chapterCount = try c.decodeIfPresent(Int.self, forKey: .chapterCount) ?? 0
+        splitVersion = try c.decodeIfPresent(Int.self, forKey: .splitVersion) ?? 0
         totalCharacters = try c.decodeIfPresent(Int.self, forKey: .totalCharacters) ?? 0
         progress = try c.decodeIfPresent(ReadingProgress.self, forKey: .progress) ?? ReadingProgress()
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0

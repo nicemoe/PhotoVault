@@ -9,17 +9,30 @@ struct ParsedChapter {
 /// TXT 章节切分。
 enum ChapterSplitter {
 
+    /// 分章规则的版本。规则改了就 +1，旧书会被重新拆一遍（见 BookLibrary）。
+    ///
+    /// 1：第一版真正能用的规则。在这之前整个正则编译不过（见下），所有书
+    ///    其实都是按字数硬切的，标题全是「第 N 节」，得整体重来一次。
+    static let version = 1
+
     /// 常见中文章节标题：第一章 / 第1节 / 序章 / 楔子 / 番外 / Chapter 1。
     /// 限制标题长度是为了避免把正文里出现的「第一次」这类词误判成标题。
+    ///
+    /// 全角空格写 \\u3000 而不是 \\u{3000}。后者是 **Swift** 的转义写法，
+    /// 而这里是双反斜杠——字符串里装的是字面的那六个字符，最后交给正则
+    /// 引擎的也是它们。ICU 只认 \\uhhhh 四位十六进制，碰上 \\u{ 直接判
+    /// 「转义不完整」，整个模式编译失败。而构造那儿是 try?，错误被吞掉
+    /// 返回 nil，于是一个标题都找不到，每本书都掉进下面那条按字数硬切的
+    /// 兜底路——分章从来就没生效过。
     private static let pattern = """
-    ^[ \\t\\u{3000}]{0,8}\
+    ^[ \\t\\u3000]{0,8}\
     (?:\
     第[0-9０-９一二三四五六七八九十百千零两]{1,12}[章节節回卷篇集部幕]\
     |[序楔]\\s*[章子]\
     |楔子|引子|前言|序言|后记|後記|尾声|尾聲|终章|終章|番外[^\\n]{0,10}\
     |Chapter\\s+[0-9IVXivx]{1,6}\
     )\
-    [ \\t\\u{3000}]*[^\\n]{0,40}$
+    [ \\t\\u3000]*[^\\n]{0,40}$
     """
 
     /// 一本书里章节太少（比如整本一坨），就按固定字数切，
@@ -57,9 +70,14 @@ enum ChapterSplitter {
     // MARK: 找标题行
 
     private static func headingRanges(in text: String) -> [Range<String.Index>] {
+        // 不要 .allowCommentsAndWhitespace。
+        //
+        // 这个模式是靠行尾续行拼成一行的，里面本来就没有换行、也没有注释，
+        // 开着那个选项什么都不多做，坏处却实打实：ICU 在那个模式下连字符类
+        // 里的空格都一起吃掉，于是缩进用普通空格的标题行会匹配不上。
         guard let regex = try? NSRegularExpression(
             pattern: pattern,
-            options: [.anchorsMatchLines, .allowCommentsAndWhitespace]
+            options: [.anchorsMatchLines]
         ) else { return [] }
 
         let ns = text as NSString

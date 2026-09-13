@@ -395,6 +395,7 @@ final class BookLibrary {
                         author: parsed.author,
                         format: ext == "epub" ? .epub : .txt,
                         chapterCount: built.metas.count,
+                        splitVersion: ChapterSplitter.version,
                         totalCharacters: built.characters,
                         colorIndex: abs(parsed.title.hashValue) % Theme.paletteHex.count)
 
@@ -489,7 +490,7 @@ final class BookLibrary {
         return saved
     }
 
-    /// 在访达里改过的书，重新拆一遍。
+    /// 该重拆的书重拆一遍：在访达里改过的，以及按老规则拆的。
     ///
     /// 章节记的是字节范围，而正文文件就摆在共享目录里，人随时能打开改两笔。
     /// 一改，后面每一章的偏移就整体错位，而且是静悄悄地错——点开某一章，
@@ -507,7 +508,15 @@ final class BookLibrary {
 
         let sizes = await Task.detached(priority: .utility) { Self.fileSizes() }.value
         let stale: [(id: UUID, name: String)] = books.compactMap { book in
-            guard !book.sourceName.isEmpty, book.textBytes > 0,
+            guard !book.sourceName.isEmpty else { return nil }
+            // 一、分章规则比这本书拆的时候新了。
+            //
+            // 章节表是导入那一刻算出来存下的，规则改进了它不会自己变好。
+            // 头一版规则其实整个编译不过，所有书都是按字数硬切的，
+            // 标题全是「第 N 节」——那一批全靠这条捞回来。
+            if book.splitVersion < ChapterSplitter.version { return (book.id, book.sourceName) }
+            // 二、文件在电脑上被改过，偏移全不作数了
+            guard book.textBytes > 0,
                   let size = sizes[book.sourceName.lowercased()],
                   size != book.textBytes else { return nil }
             return (book.id, book.sourceName)
@@ -567,6 +576,7 @@ final class BookLibrary {
             books[i].sourceName = built.name
             books[i].textBytes = built.bytes
             books[i].chapterCount = built.metas.count
+            books[i].splitVersion = ChapterSplitter.version
             books[i].totalCharacters = built.characters
             saveNow()
         }
