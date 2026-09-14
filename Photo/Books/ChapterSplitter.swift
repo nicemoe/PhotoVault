@@ -30,48 +30,52 @@ enum ChapterSplitter {
     /// 4：清掉上一版塞进正文的编号行。3 里也写了这段清理，但正则少了 (?m)，
     ///    一行都没清着，等于空转。
     /// 5：认「第一章 XXX……」后面直接跟正文、一行写到底的那种。
-    static let version = 5
+    /// 6：找边界和取名字拆成两步，正则只管找编号。
+    static let version = 6
 
-    /// 常见中文章节标题：第一章 / 第1节 / 序章 / 楔子 / 番外 / Chapter 1。
-    /// 限制标题长度是为了避免把正文里出现的「第一次」这类词误判成标题。
+    /// 编号。一行开头的「第一章」「楔子」「Chapter 1」这些。
     ///
-    /// 编号后面那一截有四种收法，按从紧到松排，正则会挑第一个走得通的：
+    /// 这条正则**只干一件事**：找出一章从哪儿开始。名字叫什么不归它管。
     ///
-    /// 1. `[^\\n]{0,40}$` —— 整行就是标题，最常见的那种。
-    /// 2. `[^\\n]{1,24}?(?=[ \\u3000]{2})` —— 标题后面用连续空格隔开正文，
-    ///    一行写到底。这种要把标题那一截捞出来，不然目录里只剩「第一章」。
-    /// 3. `[ \\t\\u3000]+` —— 标题后面就是正文，中间只有一个空格，
-    ///    看不出哪儿是标题的结尾。那就只认到编号，名字留在正文里。
-    /// 4. `[：:、．·]` —— 用标点隔开的。
+    /// 分开是因为这两件事的把握程度差得远。编号是硬的——「第一章」就是
+    /// 第一章，认错的余地很小。名字是软的——「第一章 陨落的天才」和
+    /// 「第一章 陨落的天才　　斗气大陆，分为斗者、斗师……」前面一模一样，
+    /// 从哪儿算名字的结尾，没有可靠答案。
     ///
-    /// 第 2、3 两条是后加的：原来只有第 1 条，要求四十字内必须到行尾，
-    /// 而「第一章 XXX……」后面直接跟着几百字正文的那种书走不到行尾，
-    /// 整章都认不出来，于是整本掉进按字数硬切的兜底路。
+    /// 混在一条正则里的下场，之前试过了：为了把后一种也认出来，得放宽尾部
+    /// 的限制，而一放宽，正文里一段话开头写「第三章节的内容让他很失望」
+    /// 就被当成了标题。为了凑名字，把边界也弄丢了。
     ///
-    /// 松到这儿为止。再往下（比如允许编号前面带前缀）误判会明显变多——
-    /// 正文里一段话开头写「第三章的内容让他很失望」就会被当成标题。
+    /// 所以边界归正则、名字归下面那个函数，各自用各自的判据。
     ///
-    /// 全角空格写 \\u3000 而不是 \\u{3000}。后者是 **Swift** 的转义写法，
-    /// 而这里是双反斜杠——字符串里装的是字面的那六个字符，最后交给正则
-    /// 引擎的也是它们。ICU 只认 \\uhhhh 四位十六进制，碰上 \\u{ 直接判
-    /// 「转义不完整」，整个模式编译失败。而构造那儿是 try?，错误被吞掉
-    /// 返回 nil，于是一个标题都找不到，每本书都掉进下面那条按字数硬切的
-    /// 兜底路——分章从来就没生效过。
-    private static let pattern = """
+    /// 结尾那个前瞻是必须的：编号后面得是行尾、空白或者分隔标点。不这么
+    /// 卡的话，「第三章节」里的「第三章」也会被当成编号——而它只是个词。
+    ///
+    /// 全角空格写 \u3000 而不是 \u{3000}。后者是 Swift 的转义写法，而这里是
+    /// 双反斜杠，字符串里装的是字面的那六个字符，交给正则引擎的也是它们。
+    /// ICU 只认 \uhhhh 四位十六进制，碰上 \u{ 直接判「转义不完整」，整个
+    /// 模式编译失败——而构造那儿是 try?，错误被吞掉返回 nil，于是一个标题
+    /// 都找不到，每本书都掉进按字数硬切的兜底路。这个坑埋了很久。
+    private static let markerPattern = """
     ^[ \\t\\u3000]{0,8}\
     (?:\
     第[0-9０-９一二三四五六七八九十百千零两]{1,12}[章节節回卷篇集部幕]\
     |[序楔]\\s*[章子]\
-    |楔子|引子|前言|序言|后记|後記|尾声|尾聲|终章|終章|番外[^\\n]{0,10}\
+    |楔子|引子|前言|序言|后记|後記|尾声|尾聲|终章|終章\
+    |番外篇?[0-9０-９一二三四五六七八九十]{0,3}\
     |Chapter\\s+[0-9IVXivx]{1,6}\
     )\
-    (?:\
-    [ \\t\\u3000]*[^\\n]{0,40}$\
-    |[ \\t\\u3000]+[^\\n]{1,24}?(?=[ \\u3000]{2})\
-    |[ \\t\\u3000]+\
-    |[：:、．·]\
-    )
+    (?=$|[ \\t\\u3000：:、．·\\-—])
     """
+
+    /// 名字最多这么长。再长的多半已经是正文了。
+    private static let titleLimit = 30
+
+    /// 句子里才有的标点。名字里出现这些，说明认到正文里去了。
+    private static let proseMarks = Set<Character>("。！？；…，,;!?“”\"")
+
+    /// 编号和名字之间可能隔着这些
+    private static let titleSeparators = CharacterSet(charactersIn: " \t\u{3000}：:、．·-—")
 
     /// 一本书里章节太少（比如整本一坨），就按固定字数切，
     /// 否则单章几十万字，分页和滚动都会卡。
@@ -138,7 +142,7 @@ enum ChapterSplitter {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: 找标题行
+    // MARK: 第一步 —— 找出一章从哪儿开始
 
     private static func headingRanges(in text: String) -> [Range<String.Index>] {
         // 不要 .allowCommentsAndWhitespace。
@@ -147,13 +151,38 @@ enum ChapterSplitter {
         // 开着那个选项什么都不多做，坏处却实打实：ICU 在那个模式下连字符类
         // 里的空格都一起吃掉，于是缩进用普通空格的标题行会匹配不上。
         guard let regex = try? NSRegularExpression(
-            pattern: pattern,
+            pattern: markerPattern,
             options: [.anchorsMatchLines]
         ) else { return [] }
 
         let ns = text as NSString
         let all = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
         return all.compactMap { Range($0.range, in: text) }
+    }
+
+    // MARK: 第二步 —— 这一章叫什么
+
+    /// 目录里显示的标题。
+    ///
+    /// 编号一定要，名字只在看得清的时候才要。
+    ///
+    /// 「第一章 陨落的天才」这种整行就是标题的，连名字一起报。而
+    /// 「第一章 陨落的天才　　斗气大陆，分为斗者、斗师……」这种名字和正文
+    /// 挤在一行的，就只报「第一章」——从哪儿算名字的结尾没有可靠答案，
+    /// 猜错的代价是目录里摆着半句正文，比少一个名字难受得多。
+    ///
+    /// 名字没丢：正文是从编号那一行开始的，点进去第一行还是完整的原文。
+    private static func title(in text: String, marker: Range<String.Index>) -> String {
+        let number = String(text[marker]).trimmingCharacters(in: .whitespaces)
+        let lineEnd = text[marker.upperBound...].firstIndex(of: "\n") ?? text.endIndex
+        let rest = String(text[marker.upperBound..<lineEnd])
+            .trimmingCharacters(in: titleSeparators)
+
+        guard !rest.isEmpty else { return number }
+        // 太长、或者带着句子里才有的标点，说明已经读到正文里去了
+        guard rest.count <= titleLimit,
+              !rest.contains(where: proseMarks.contains) else { return number }
+        return number + " " + rest
     }
 
     private static func chapters(from text: String, headings: [Range<String.Index>]) -> [ParsedChapter] {
@@ -177,9 +206,9 @@ enum ChapterSplitter {
             let end = i + 1 < headings.count ? headings[i + 1].lowerBound : text.endIndex
             guard start <= end else { continue }
 
-            let title = String(text[heading]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = title(in: text, marker: heading)
             let whole = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-            result.append(ParsedChapter(title: title.isEmpty ? "第 \(i + 1) 章" : title,
+            result.append(ParsedChapter(title: name.isEmpty ? "第 \(i + 1) 章" : name,
                                         text: whole))
         }
         return result
